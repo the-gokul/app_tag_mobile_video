@@ -1,0 +1,104 @@
+<?xml version="1.0" encoding="utf-8"?>
+<ScrollView
+    xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#F3F4F6"
+    android:padding="16dp">
+
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical">
+
+        <!-- Resolution -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Resolution"
+            android:textStyle="bold"
+            android:textSize="14sp"
+            android:textColor="#374151"
+            android:layout_marginBottom="4dp" />
+        <Spinner
+            android:id="@+id/resolutionSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_spinner"
+            android:layout_marginBottom="20dp" />
+
+        <!-- Orientation -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Orientation"
+            android:textStyle="bold"
+            android:textSize="14sp"
+            android:textColor="#374151"
+            android:layout_marginBottom="4dp" />
+        <Spinner
+            android:id="@+id/orientationSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_spinner"
+            android:layout_marginBottom="20dp" />
+
+        <!-- Video Format -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Video format"
+            android:textStyle="bold"
+            android:textSize="14sp"
+            android:textColor="#374151"
+            android:layout_marginBottom="4dp" />
+        <Spinner
+            android:id="@+id/videoFormatSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_spinner"
+            android:layout_marginBottom="20dp" />
+
+        <!-- Video Codec -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Video codec"
+            android:textStyle="bold"
+            android:textSize="14sp"
+            android:textColor="#374151"
+            android:layout_marginBottom="4dp" />
+        <Spinner
+            android:id="@+id/videoCodecSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_spinner"
+            android:layout_marginBottom="20dp" />
+
+        <!-- Frame Rate -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Frame rate"
+            android:textStyle="bold"
+            android:textSize="14sp"
+            android:textColor="#374151"
+            android:layout_marginBottom="4dp" />
+        <Spinner
+            android:id="@+id/frameRateSpinner"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@drawable/bg_spinner"
+            android:layout_marginBottom="32dp" />
+
+        <Button
+            android:id="@+id/saveCameraConfigBtn"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Save Settings"
+            android:backgroundTint="#00A9CE"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:padding="14dp" />
+    </LinearLayout>
+</ScrollView>

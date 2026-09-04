@@ -1,0 +1,15 @@
+# Built files
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+*.apk
+*.aab
+build.log
+
+# IDE
+.idea/
+*.iml
+.DS_Store
+
+debug-*.log

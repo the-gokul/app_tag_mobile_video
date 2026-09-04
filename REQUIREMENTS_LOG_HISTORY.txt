@@ -1,0 +1,121 @@
+Tag Mobile App — Logging, History & Storage Requirements
+=========================================================
+Based on discussion (September 2026)
+Project: C:\nordic\v\app_tag_mobile
+Status: Implemented in app code (see android/ logging, history, auto-save)
+
+
+1. PURPOSE
+----------
+Add a normal mobile-app style menu, settings, logging, and file history so users can:
+- See BLE and data-receive activity inside the app
+- Auto-save CSV and log after each Start→Stop recording
+- Browse history and share CSV and/or log files when they want
+- Get feedback after Stop about packet counts and possible packet loss
+
+
+2. MENU (TOP-RIGHT)
+-------------------
+Add a 3-horizontal-bar (hamburger / overflow) icon on the top-right of the Home
+screen (and optionally Device screen).
+
+Menu items:
+- Settings
+- Logs (log viewer / log management entry)
+- History (list of past recordings)
+- About (optional: app version)
+
+
+3. SETTINGS (UNDER MENU)
+------------------------
+Useful options (v1):
+- Logging On/Off
+- Log level:
+  - Errors only
+  - BLE + control (recommended default)
+  - Verbose (every packet — large files; optional)
+- Optional later: default CSV SI units, scan filter preferences
+
+No cloud/server settings required for v1.
+
+
+4. LOGGING — WHAT TO RECORD
+---------------------------
+Categories:
+- App: start, permission grant/deny
+- BLE: scan start/stop, connect attempt, GATT OK/fail, disconnect, MTU
+- Control: START (+ sync time), STOP, notify enable
+- Data: packets received (summary or per-packet if verbose), parse OK/fail
+- Gaps / loss: jumps in packet_id or sample_number → "possible packet gap"
+- File: auto-save of CSV and log (names, sizes, success/fail)
+- Errors: same text shown in Toasts, also written to log
+
+Example line format:
+  2026-09-03 10:54:12.345 | BLE | CONNECT_OK | Tag | AA:BB:CC:DD:EE:FF | MTU=247
+
+In-app log viewer:
+- Scrollable list of recent events (live buffer)
+
+Note on packet loss wording:
+- App can detect SEQUENCE GAPS from packet_id / sample_number
+- Do NOT claim absolute "confirmed radio loss" unless firmware adds ACK later
+- UI text: "No packet loss detected" OR "Possible packet loss" / "Possible packet gap"
+
+
+5. AUTO-SAVE AFTER START → STOP (IMPORTANT)
+-------------------------------------------
+CSV and log are AUTO-SAVED when the user completes a recording:
+
+  Start  → begin session (clear buffers, log START + time sync, collect data)
+  Stop   → stop receive, verify counts/gaps, show feedback on screen,
+           then AUTO-WRITE both files (no mandatory "Save" name step for storage)
+
+File naming (auto-generated), same BASE name for both files, for example:
+  Tag_2026-09-03_10-54-12
+
+Then write:
+  csv/Tag_2026-09-03_10-54-12.csv
+  logs/Tag_2026-09-03_10-54-12.log
+
+Same base name, DIFFERENT folders.
+
+Save button becomes Export (copy of last CSV).
+
+
+6. FOLDER LAYOUT (APP LOCAL "BACKEND" — PHONE ONLY)
+--------------------------------------------------
+No cloud/server backend in v1.
+
+  Tag app files/
+  ├── csv/
+  │   └── Tag_2026-09-03_10-54-12.csv
+  └── logs/
+      └── Tag_2026-09-03_10-54-12.log
+
+
+7. AFTER STOP — VERIFICATION & FEEDBACK (REQUIRED)
+--------------------------------------------------
+Immediately after Stop, analyze the session and show feedback on the Device screen.
+
+
+8. HISTORY (FRONT-END LIST)
+---------------------------
+Under menu → History:
+- List all auto-saved takes, newest first
+- Share CSV / Share log / Share both
+- NO DELETE option
+
+
+9. NO DELETE
+------------
+No Delete button in History.
+
+
+10. SHARE
+---------
+Android system share sheet. No forced cloud backend.
+
+
+END OF REQUIREMENTS
+-------------------
+Plain-text copy of discussion requirements for the Log/History feature.

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.TagMobile" parent="Theme.MaterialComponents.Light.NoActionBar">
+        <item name="colorPrimary">#00A9CE</item>
+        <item name="colorPrimaryVariant">#0093B5</item>
+        <item name="colorOnPrimary">@android:color/white</item>
+        <item name="android:statusBarColor">#00A9CE</item>
+        <item name="android:navigationBarColor">@android:color/white</item>
+    </style>
+</resources>
