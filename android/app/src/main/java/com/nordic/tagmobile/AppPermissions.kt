@@ -28,7 +28,6 @@ object AppPermissions {
 
     fun camera(): Array<String> = arrayOf(
         Manifest.permission.CAMERA,
-        Manifest.permission.RECORD_AUDIO,
     )
 
     fun all(): Array<String> =

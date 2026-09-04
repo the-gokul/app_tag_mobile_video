@@ -136,4 +136,10 @@ object RecordingStore {
         val status: String,
         val savedAt: Long,
     )
+
+    fun deleteEntry(context: Context, entry: HistoryEntry) {
+        entry.csvFile.delete()
+        entry.logFile.delete()
+        metaFile(context, entry.baseName).delete()
+    }
 }

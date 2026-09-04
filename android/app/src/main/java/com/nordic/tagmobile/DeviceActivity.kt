@@ -1,51 +1,82 @@
 package com.nordic.tagmobile
 
+import android.Manifest
+import android.annotation.SuppressLint
 import android.content.Intent
+import android.content.pm.ActivityInfo
+import android.content.pm.PackageManager
+import android.graphics.SurfaceTexture
+import android.hardware.camera2.*
+import android.media.MediaRecorder
 import android.os.Bundle
+import android.os.Handler
+import android.os.HandlerThread
 import android.view.MenuItem
+import android.view.Surface
+import android.view.TextureView
 import android.view.View
 import android.widget.PopupMenu
 import android.widget.Toast
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.content.ContextCompat
 import com.nordic.tagmobile.analysis.SessionAnalyzer
 import com.nordic.tagmobile.ble.TagBleManager
 import com.nordic.tagmobile.databinding.ActivityDeviceBinding
 import com.nordic.tagmobile.log.LogCategory
 import com.nordic.tagmobile.log.TagLogger
+import com.nordic.tagmobile.model.CameraConfig
 import com.nordic.tagmobile.model.RecordingState
 import com.nordic.tagmobile.protocol.CsvExporter
 import com.nordic.tagmobile.protocol.SensorPacketParser
 import com.nordic.tagmobile.protocol.SensorPacketParser.HEADER_SIZE
 import com.nordic.tagmobile.storage.RecordingStore
+import java.io.File
+import java.text.SimpleDateFormat
+import java.util.*
 
 class DeviceActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityDeviceBinding
     private val bleManager get() = TagApp.instance.bleManager
-    private var pendingExportCsv: String? = null
-    private var pendingExportName: String? = null
 
-    private val exportLauncher = registerForActivityResult(
-        ActivityResultContracts.CreateDocument("text/csv"),
-    ) { uri ->
-        val csv = pendingExportCsv
-        val name = pendingExportName
-        if (uri != null && csv != null) {
-            try {
-                contentResolver.openOutputStream(uri)?.use {
-                    it.write(csv.toByteArray(Charsets.UTF_8))
-                }
-                Toast.makeText(this, "Exported ${name ?: "file.csv"}", Toast.LENGTH_LONG).show()
-                TagLogger.log(LogCategory.FILE, "EXPORT_OK", name ?: "")
-            } catch (e: Exception) {
-                Toast.makeText(this, "Export failed: ${e.message}", Toast.LENGTH_LONG).show()
-                TagLogger.log(LogCategory.ERRORS, "EXPORT_FAIL", e.message ?: "")
-            }
+    // Camera fields
+    private var cameraDevice: CameraDevice? = null
+    private var captureSession: CameraCaptureSession? = null
+    private var mediaRecorder: MediaRecorder? = null
+    private var backgroundThread: HandlerThread? = null
+    private var backgroundHandler: Handler? = null
+    private var videoFile: File? = null
+    private var isRecording = false
+    private var timestampHandler: Handler? = null
+    private val timestampRunnable = object : Runnable {
+        override fun run() {
+            updateTimestamp()
+            timestampHandler?.postDelayed(this, 500)
         }
-        pendingExportCsv = null
-        pendingExportName = null
-        updateRecordingUi()
+    }
+    private val cameraConfig: CameraConfig get() = TagSession.cameraConfig
+
+    private val surfaceListener = object : TextureView.SurfaceTextureListener {
+        override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
+            openCamera()
+        }
+        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) = Unit
+        override fun onSurfaceTextureDestroyed(st: SurfaceTexture) = true
+        override fun onSurfaceTextureUpdated(st: SurfaceTexture) = Unit
+    }
+
+    private val cameraStateCallback = object : CameraDevice.StateCallback() {
+        override fun onOpened(camera: CameraDevice) {
+            cameraDevice = camera
+            startPreview()
+        }
+        override fun onDisconnected(camera: CameraDevice) {
+            camera.close(); cameraDevice = null
+        }
+        override fun onError(camera: CameraDevice, error: Int) {
+            camera.close(); cameraDevice = null
+            runOnUiThread { Toast.makeText(this@DeviceActivity, "Camera error $error", Toast.LENGTH_SHORT).show() }
+        }
     }
 
     private val bleListener = object : TagBleManager.Listener {
@@ -87,7 +118,6 @@ class DeviceActivity : AppCompatActivity() {
                     "PACKET",
                     "id=${parsed.packetId} samples=${parsed.rows.size}",
                 )
-                updateRecordingUi()
             }
         }
 
@@ -110,24 +140,95 @@ class DeviceActivity : AppCompatActivity() {
             return
         }
 
+        applyOrientationFromConfig()
+
         binding.deviceTitle.text = device.name
         binding.backBtn.setOnClickListener { finish() }
         binding.deviceMenuBtn.setOnClickListener { showDeviceMenu(it) }
         binding.startBtn.setOnClickListener { startRecording() }
         binding.stopBtn.setOnClickListener { stopRecording() }
-        binding.saveBtn.text = getString(R.string.export)
-        binding.saveBtn.setOnClickListener { exportLastRecording() }
-        binding.openCameraBtn.setOnClickListener {
-            startActivity(Intent(this, CameraActivity::class.java))
-        }
 
         bleManager.listener = bleListener
-        updateRecordingUi()
+        
+        binding.startBtn.isEnabled = true
+        binding.stopBtn.isEnabled = false
+        binding.timestampText.text = currentTimestamp()
+
+        timestampHandler = Handler(mainLooper)
+        timestampHandler?.post(timestampRunnable)
     }
 
     override fun onResume() {
         super.onResume()
-        updateRecordingUi()
+        applyOrientationFromConfig()
+        startBackgroundThread()
+        if (binding.cameraPreview.isAvailable) {
+            openCamera()
+        } else {
+            binding.cameraPreview.surfaceTextureListener = surfaceListener
+        }
+    }
+
+    override fun onPause() {
+        closeCamera()
+        stopBackgroundThread()
+        super.onPause()
+    }
+
+    override fun onDestroy() {
+        timestampHandler?.removeCallbacks(timestampRunnable)
+        super.onDestroy()
+    }
+
+    private fun applyOrientationFromConfig() {
+        requestedOrientation = when (cameraConfig.orientation) {
+            CameraConfig.Orientation.PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+            CameraConfig.Orientation.LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+            CameraConfig.Orientation.AUTO -> ActivityInfo.SCREEN_ORIENTATION_SENSOR
+        }
+    }
+
+    @SuppressLint("MissingPermission")
+    private fun openCamera() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+            != PackageManager.PERMISSION_GRANTED
+        ) {
+            Toast.makeText(this, "Camera permission needed", Toast.LENGTH_SHORT).show()
+            return
+        }
+        val manager = getSystemService(CAMERA_SERVICE) as CameraManager
+        val cameraId = manager.cameraIdList.firstOrNull { id ->
+            manager.getCameraCharacteristics(id)
+                .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+        } ?: manager.cameraIdList.firstOrNull() ?: return
+        manager.openCamera(cameraId, cameraStateCallback, backgroundHandler)
+    }
+
+    private fun closeCamera() {
+        captureSession?.close(); captureSession = null
+        cameraDevice?.close(); cameraDevice = null
+        mediaRecorder?.release(); mediaRecorder = null
+    }
+
+    private fun startPreview() {
+        val texture = binding.cameraPreview.surfaceTexture ?: return
+        val previewSurface = Surface(texture)
+        val request = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
+            addTarget(previewSurface)
+        }
+        cameraDevice!!.createCaptureSession(
+            listOf(previewSurface),
+            object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(session: CameraCaptureSession) {
+                    captureSession = session
+                    session.setRepeatingRequest(request.build(), null, backgroundHandler)
+                }
+                override fun onConfigureFailed(session: CameraCaptureSession) {
+                    Toast.makeText(this@DeviceActivity, "Preview failed", Toast.LENGTH_SHORT).show()
+                }
+            },
+            backgroundHandler,
+        )
     }
 
     private fun deviceLabel(): String =
@@ -186,6 +287,8 @@ class DeviceActivity : AppCompatActivity() {
             Toast.makeText(this, "Not connected", Toast.LENGTH_SHORT).show()
             return
         }
+
+        // Setup BLE session
         TagLogger.clearSessionLog()
         TagSession.receivedRows.clear()
         TagSession.packetIds.clear()
@@ -194,31 +297,98 @@ class DeviceActivity : AppCompatActivity() {
         TagSession.lastFeedbackText = ""
         TagSession.lastHistoryEntry = null
         TagSession.tagUptimeAtSync = null
-        TagSession.recordingState = RecordingState.SYNCING
-        updateRecordingUi()
         TagSession.syncBaseUnixMs = System.currentTimeMillis()
+        TagSession.recordingState = RecordingState.RECEIVING
+
         TagLogger.log(
             LogCategory.CONTROL,
             "START",
             "unix_ms=${TagSession.syncBaseUnixMs} device=${deviceLabel()}",
         )
         bleManager.startRecording(TagSession.syncBaseUnixMs)
-        binding.root.postDelayed({
-            if (TagSession.recordingState == RecordingState.SYNCING) {
-                TagSession.recordingState = RecordingState.RECEIVING
-                updateRecordingUi()
-            }
-        }, 300)
+
+        // Setup video recording
+        isRecording = true
+        binding.startBtn.isEnabled = false
+        binding.stopBtn.isEnabled = true
+
+        val profile = TagSession.userProfile
+        val deviceName = TagSession.connectedDevice?.name?.replace(Regex("[^A-Za-z0-9_-]"), "_") ?: "Tag"
+        val ts = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date(TagSession.syncBaseUnixMs))
+        val safeProfile = profile.safeFileName
+        val baseName = if (safeProfile.isNotBlank()) "${safeProfile}_${deviceName}_${ts}" else "${deviceName}_${ts}"
+        val ext = if (cameraConfig.videoFormat == CameraConfig.VideoFormat.MP4) "mp4" else "webm"
+        val videoDir = File(filesDir, "videos").also { it.mkdirs() }
+        videoFile = File(videoDir, "$baseName.$ext")
+
+        // Setup MediaRecorder (Video only, NO AUDIO)
+        @Suppress("DEPRECATION")
+        val mr = MediaRecorder().apply {
+            setVideoSource(MediaRecorder.VideoSource.SURFACE)
+            setOutputFormat(cameraConfig.videoFormat.outputFormat)
+            setVideoEncoder(cameraConfig.videoCodec.encoderValue)
+            setVideoSize(cameraConfig.resolution.width, cameraConfig.resolution.height)
+            setVideoFrameRate(cameraConfig.frameRate.fps)
+            setOutputFile(videoFile!!.absolutePath)
+            prepare()
+        }
+        mediaRecorder = mr
+
+        // Restart camera session with recorder surface
+        val texture = binding.cameraPreview.surfaceTexture ?: return
+        val previewSurface = Surface(texture)
+        val recorderSurface = mr.surface
+
+        val request = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+            addTarget(previewSurface)
+            addTarget(recorderSurface)
+        }
+
+        captureSession?.close()
+        cameraDevice!!.createCaptureSession(
+            listOf(previewSurface, recorderSurface),
+            object : CameraCaptureSession.StateCallback() {
+                override fun onConfigured(session: CameraCaptureSession) {
+                    captureSession = session
+                    session.setRepeatingRequest(request.build(), null, backgroundHandler)
+                    mr.start()
+                    TagLogger.log(LogCategory.FILE, "VIDEO_RECORDING_START", videoFile!!.name)
+                }
+                override fun onConfigureFailed(session: CameraCaptureSession) {
+                    Toast.makeText(this@DeviceActivity, "Recording setup failed", Toast.LENGTH_SHORT).show()
+                }
+            },
+            backgroundHandler,
+        )
     }
 
     private fun stopRecording() {
-        if (TagSession.recordingState != RecordingState.RECEIVING &&
-            TagSession.recordingState != RecordingState.SYNCING
-        ) return
+        if (!isRecording) return
+        isRecording = false
+        binding.startBtn.isEnabled = true
+        binding.stopBtn.isEnabled = false
 
+        // Stop BLE
         bleManager.stopRecording()
         TagLogger.log(LogCategory.CONTROL, "STOP", deviceLabel())
 
+        // Stop video
+        try {
+            captureSession?.stopRepeating()
+            mediaRecorder?.stop()
+        } catch (e: Exception) {
+            TagLogger.log(LogCategory.ERRORS, "VIDEO_STOP_ERR", e.message ?: "")
+        }
+        mediaRecorder?.release(); mediaRecorder = null
+        TagLogger.log(LogCategory.FILE, "VIDEO_SAVED", videoFile?.name ?: "")
+
+        // Restart preview-only session
+        startPreview()
+
+        val vFile = videoFile
+        val vSize = vFile?.length()?.let { formatBytes(it) } ?: "?"
+
+        // Save data files (CSV/Log)
         val report = SessionAnalyzer.analyze(
             packetCount = TagSession.packetCount,
             rows = TagSession.receivedRows.toList(),
@@ -240,7 +410,6 @@ class DeviceActivity : AppCompatActivity() {
 
         TagSession.lastFeedbackText = report.feedbackText
         TagSession.recordingState = RecordingState.SAVING
-        updateRecordingUi()
 
         try {
             val deviceName = TagSession.connectedDevice?.name
@@ -272,8 +441,7 @@ class DeviceActivity : AppCompatActivity() {
             TagSession.lastHistoryEntry = entry
             TagSession.lastFeedbackText = report.feedbackText
             TagSession.recordingState = RecordingState.RECEIVED
-            updateRecordingUi()
-            Toast.makeText(this, "Saved ${entry.baseName}", Toast.LENGTH_SHORT).show()
+            Toast.makeText(this, "Saved ${entry.baseName}\nVideo: $vSize", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             TagLogger.log(LogCategory.ERRORS, "AUTO_SAVE_FAIL", e.message ?: "")
             TagSession.recordingState = RecordingState.RECEIVED
@@ -282,68 +450,34 @@ class DeviceActivity : AppCompatActivity() {
                     "Saved to History (CSV + log)",
                     "Save failed: ${e.message}",
                 )
-            updateRecordingUi()
             Toast.makeText(this, "Auto-save failed: ${e.message}", Toast.LENGTH_LONG).show()
         }
     }
 
-    private fun exportLastRecording() {
-        val entry = TagSession.lastHistoryEntry
-        if (entry == null || !entry.csvFile.exists()) {
-            Toast.makeText(this, R.string.export_hint, Toast.LENGTH_SHORT).show()
-            return
-        }
-        pendingExportCsv = entry.csvFile.readText(Charsets.UTF_8)
-        pendingExportName = entry.csvFile.name
-        exportLauncher.launch(entry.csvFile.name)
+    private fun currentTimestamp(): String {
+        val fmt = SimpleDateFormat("yyyy-MM-dd  HH:mm:ss", Locale.US)
+        return fmt.format(Date())
     }
 
-    private fun updateRecordingUi() {
-        val state = TagSession.recordingState
-        val isRunning = state == RecordingState.SYNCING || state == RecordingState.RECEIVING
+    private fun updateTimestamp() {
+        binding.timestampText.text = currentTimestamp()
+    }
 
-        binding.startBtn.isEnabled = !isRunning && state != RecordingState.SAVING
-        binding.stopBtn.isEnabled = isRunning
-        binding.saveBtn.visibility =
-            if (state == RecordingState.RECEIVED && TagSession.lastHistoryEntry != null) {
-                View.VISIBLE
-            } else {
-                View.GONE
-            }
-        binding.saveBtn.isEnabled = state == RecordingState.RECEIVED
+    private fun startBackgroundThread() {
+        backgroundThread = HandlerThread("CameraBackground").also { it.start() }
+        backgroundHandler = Handler(backgroundThread!!.looper)
+    }
 
-        when (state) {
-            RecordingState.IDLE -> {
-                binding.recordStatus.text = getString(R.string.status_ready)
-                binding.recordMeta.text =
-                    "Start sends mobile date/time to tag once. Stop auto-saves CSV + log."
-            }
-            RecordingState.SYNCING -> {
-                binding.recordStatus.text = "Syncing mobile time to tag…"
-                binding.recordMeta.text = "Sending START command…"
-            }
-            RecordingState.RECEIVING -> {
-                binding.recordStatus.text =
-                    "Receiving… ${TagSession.packetCount} packets"
-                binding.recordMeta.text =
-                    "Synced at ${CsvExporter.formatDateTime(TagSession.syncBaseUnixMs)}. " +
-                        "Rows: ${TagSession.receivedRows.size}"
-            }
-            RecordingState.RECEIVED -> {
-                binding.recordStatus.text =
-                    "Received · ${TagSession.packetCount} packets"
-                binding.recordMeta.text =
-                    TagSession.lastFeedbackText.ifBlank {
-                        "Auto-saved to History. Use Export for a copy."
-                    }
-            }
-            RecordingState.CONVERTING -> {
-                binding.recordStatus.text = "Preparing files…"
-            }
-            RecordingState.SAVING -> {
-                binding.recordStatus.text = "Saving CSV + log…"
-                binding.recordMeta.text = TagSession.lastFeedbackText
-            }
-        }
+    private fun stopBackgroundThread() {
+        backgroundThread?.quitSafely()
+        backgroundThread?.join()
+        backgroundThread = null
+        backgroundHandler = null
+    }
+
+    private fun formatBytes(bytes: Long): String = when {
+        bytes < 1024 -> "$bytes B"
+        bytes < 1024 * 1024 -> "${bytes / 1024} KB"
+        else -> String.format("%.1f MB", bytes / 1024.0 / 1024.0)
     }
 }

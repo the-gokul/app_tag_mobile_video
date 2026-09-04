@@ -38,6 +38,18 @@ class HistoryActivity : AppCompatActivity() {
             }
             shareFiles(files, "*/*")
         },
+        onDelete = {
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Delete Recording")
+                .setMessage("Are you sure you want to permanently delete ${it.baseName}?")
+                .setPositiveButton("Delete") { _, _ ->
+                    RecordingStore.deleteEntry(this, it)
+                    reload()
+                    Toast.makeText(this, "Deleted ${it.baseName}", Toast.LENGTH_SHORT).show()
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
     )
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -97,6 +109,7 @@ class HistoryActivity : AppCompatActivity() {
         private val onShareCsv: (HistoryEntry) -> Unit,
         private val onShareLog: (HistoryEntry) -> Unit,
         private val onShareBoth: (HistoryEntry) -> Unit,
+        private val onDelete: (HistoryEntry) -> Unit,
     ) : RecyclerView.Adapter<HistoryAdapter.Holder>() {
 
         private var items: List<HistoryEntry> = emptyList()
@@ -123,6 +136,7 @@ class HistoryActivity : AppCompatActivity() {
             holder.shareCsv.setOnClickListener { onShareCsv(item) }
             holder.shareLog.setOnClickListener { onShareLog(item) }
             holder.shareBoth.setOnClickListener { onShareBoth(item) }
+            holder.deleteBtn.setOnClickListener { onDelete(item) }
         }
 
         override fun getItemCount(): Int = items.size
@@ -134,6 +148,7 @@ class HistoryActivity : AppCompatActivity() {
             val shareCsv: Button = view.findViewById(R.id.shareCsvBtn)
             val shareLog: Button = view.findViewById(R.id.shareLogBtn)
             val shareBoth: Button = view.findViewById(R.id.shareBothBtn)
+            val deleteBtn: android.widget.ImageButton = view.findViewById(R.id.deleteBtn)
         }
     }
 }

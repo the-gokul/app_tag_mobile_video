@@ -49,8 +49,10 @@
 
     <Button
         android:id="@+id/saveProfileBtn"
-        android:layout_width="match_parent"
+        android:layout_width="wrap_content"
         android:layout_height="wrap_content"
+        android:layout_gravity="center_horizontal"
+        android:minWidth="200dp"
         android:text="Save Profile"
         android:backgroundTint="#00A9CE"
         android:textColor="#FFFFFF"

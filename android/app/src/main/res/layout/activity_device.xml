@@ -53,99 +53,62 @@
             android:contentDescription="@string/disconnect" />
     </LinearLayout>
 
-    <ScrollView
+    <!-- Camera preview with timestamp overlay -->
+    <FrameLayout
         android:layout_width="match_parent"
-        android:layout_height="match_parent"
-        android:padding="16dp">
+        android:layout_height="0dp"
+        android:layout_weight="1">
 
-        <LinearLayout
+        <TextureView
+            android:id="@+id/cameraPreview"
             android:layout_width="match_parent"
+            android:layout_height="match_parent" />
+
+        <!-- Timestamp overlay — dark background ensures readability on any surface -->
+        <TextView
+            android:id="@+id/timestampText"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:orientation="vertical">
+            android:layout_gravity="top|start"
+            android:layout_margin="12dp"
+            android:padding="6dp"
+            android:paddingHorizontal="10dp"
+            android:background="#8C000000"
+            android:textColor="#FFFFFF"
+            android:textSize="13sp"
+            android:fontFamily="monospace"
+            android:text="0000-00-00  00:00:00" />
+    </FrameLayout>
 
-            <com.google.android.material.card.MaterialCardView
-                android:layout_width="match_parent"
-                android:layout_height="wrap_content"
-                app:cardCornerRadius="16dp"
-                app:strokeColor="#D1D5DB"
-                app:strokeWidth="1dp">
+    <!-- Controls -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="horizontal"
+        android:padding="16dp"
+        android:background="#FFFFFF"
+        android:elevation="4dp">
 
-                <LinearLayout
-                    android:layout_width="match_parent"
-                    android:layout_height="wrap_content"
-                    android:orientation="vertical"
-                    android:padding="16dp">
+        <Button
+            android:id="@+id/startBtn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:layout_marginEnd="8dp"
+            android:text="@string/start"
+            android:backgroundTint="#22C55E"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold" />
 
-                    <TextView
-                        android:layout_width="wrap_content"
-                        android:layout_height="wrap_content"
-                        android:text="DATA CAPTURE"
-                        android:textColor="#6B7280"
-                        android:textStyle="bold"
-                        android:textSize="12sp"
-                        android:layout_marginBottom="12dp" />
-
-                    <TextView
-                        android:id="@+id/recordStatus"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:background="@drawable/bg_status_idle"
-                        android:padding="12dp"
-                        android:text="@string/status_ready"
-                        android:textStyle="bold"
-                        android:textColor="#4B5563"
-                        android:layout_marginBottom="12dp" />
-
-                    <LinearLayout
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:orientation="horizontal">
-
-                        <Button
-                            android:id="@+id/startBtn"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:layout_marginEnd="8dp"
-                            android:text="@string/start"
-                            android:backgroundTint="#22C55E" />
-
-                        <Button
-                            android:id="@+id/stopBtn"
-                            android:layout_width="0dp"
-                            android:layout_height="wrap_content"
-                            android:layout_weight="1"
-                            android:text="@string/stop"
-                            android:enabled="false"
-                            android:backgroundTint="#EF4444" />
-                    </LinearLayout>
-
-                    <Button
-                        android:id="@+id/saveBtn"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        android:text="@string/save"
-                        android:visibility="gone"
-                        android:backgroundTint="#00A9CE" />
-
-                    <Button
-                        android:id="@+id/openCameraBtn"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="10dp"
-                        android:text="@string/open_camera"
-                        android:backgroundTint="#6366F1" />
-
-                    <TextView
-                        android:id="@+id/recordMeta"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="8dp"
-                        android:textColor="#6B7280"
-                        android:textSize="12sp" />
-                </LinearLayout>
-            </com.google.android.material.card.MaterialCardView>
-        </LinearLayout>
-    </ScrollView>
+        <Button
+            android:id="@+id/stopBtn"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:text="@string/stop"
+            android:backgroundTint="#EF4444"
+            android:textColor="#FFFFFF"
+            android:textStyle="bold"
+            android:enabled="false" />
+    </LinearLayout>
 </LinearLayout>

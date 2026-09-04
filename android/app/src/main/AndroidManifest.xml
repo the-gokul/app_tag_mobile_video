@@ -17,9 +17,8 @@
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE"
         android:maxSdkVersion="28" />
 
-    <!-- Camera & audio for video recording -->
+    <!-- Camera for video recording -->
     <uses-permission android:name="android.permission.CAMERA" />
-    <uses-permission android:name="android.permission.RECORD_AUDIO" />
 
     <uses-feature android:name="android.hardware.bluetooth_le" android:required="true" />
     <uses-feature android:name="android.hardware.bluetooth" android:required="true" />
@@ -43,16 +42,15 @@
             </intent-filter>
         </activity>
         <activity android:name=".ScannerActivity" android:exported="false" />
-        <activity android:name=".DeviceActivity" android:exported="false" />
+        <activity
+            android:name=".DeviceActivity"
+            android:exported="false"
+            android:screenOrientation="sensor" />
         <activity android:name=".CustomDataActivity" android:exported="false" />
         <activity android:name=".SettingsActivity" android:exported="false" />
         <activity android:name=".LogViewerActivity" android:exported="false" />
         <activity android:name=".HistoryActivity" android:exported="false" />
         <activity android:name=".ProfileActivity" android:exported="false" />
-        <activity
-            android:name=".CameraActivity"
-            android:exported="false"
-            android:screenOrientation="sensor" />
         <activity android:name=".CameraConfigActivity" android:exported="false" />
 
         <provider
