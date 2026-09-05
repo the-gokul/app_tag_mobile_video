@@ -44,7 +44,20 @@ jobs:
         working-directory: android
         shell: bash
         run: |
-          ./gradlew assembleDebug --no-daemon --stacktrace
+          set -o pipefail
+          ./gradlew assembleDebug --no-daemon --stacktrace 2>&1 | tee ../build.log || {
+            echo "::group::Build errors"
+            tail -80 ../build.log
+            echo "::endgroup::"
+            exit 1
+          }
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
 
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
