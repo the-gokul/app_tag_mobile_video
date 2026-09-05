@@ -436,15 +436,8 @@ class DeviceActivity : AppCompatActivity() {
             val profilePrefix = TagSession.userProfile.safeFileName
             val baseName = RecordingStore.makeBaseName(deviceName, profilePrefix = profilePrefix)
             val dataFile = RecordingStore.dataFile(this, baseName)
-            
-            com.nordic.tagmobile.protocol.ExcelExporter.exportToExcel(
-                file = dataFile,
-                rows = TagSession.receivedRows,
-                profile = TagSession.userProfile,
-                packetCount = report.packetCount,
-                sampleCount = report.sampleCount,
-                status = report.statusShort
-            )
+            val csvContent = com.nordic.tagmobile.protocol.CsvExporter.build(TagSession.receivedRows)
+            dataFile.writeText(csvContent, Charsets.UTF_8)
             
             val logBody = buildString {
                 appendLine("Tag session log")

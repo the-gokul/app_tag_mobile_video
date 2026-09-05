@@ -66,7 +66,5 @@ dependencies {
     implementation("no.nordicsemi.android:ble-ktx:2.9.0")
     implementation("no.nordicsemi.android.support.v18:scanner:1.6.0")
 
-    // Apache POI for Excel export
-    implementation("org.apache.poi:poi:5.2.3")
-    implementation("org.apache.poi:poi-ooxml:5.2.3")
+
 }

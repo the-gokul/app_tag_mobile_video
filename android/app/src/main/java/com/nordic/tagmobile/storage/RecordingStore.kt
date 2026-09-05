@@ -45,7 +45,7 @@ object RecordingStore {
     }
 
     fun dataFile(context: Context, baseName: String): File =
-        File(dataDir(context), "$baseName.xlsx")
+        File(dataDir(context), "$baseName.csv")
 
     fun logFile(context: Context, baseName: String): File =
         File(logsDir(context), "$baseName.log")
@@ -106,13 +106,13 @@ object RecordingStore {
         val dataRoot = dataDir(context)
         val logsRoot = logsDir(context)
         val bases = dataRoot.listFiles()
-            ?.filter { it.isFile && it.name.endsWith(".xlsx") }
-            ?.map { it.name.removeSuffix(".xlsx") }
+            ?.filter { it.isFile && it.name.endsWith(".csv") }
+            ?.map { it.name.removeSuffix(".csv") }
             ?.distinct()
             ?: emptyList()
 
         return bases.mapNotNull { base ->
-            val dataF = File(dataRoot, "$base.xlsx")
+            val dataF = File(dataRoot, "$base.csv")
             val logF = File(logsRoot, "$base.log")
             if (!dataF.exists()) return@mapNotNull null
             val meta = metaFile(context, base)

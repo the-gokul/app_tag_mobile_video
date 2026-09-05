@@ -24,7 +24,7 @@ class HistoryActivity : AppCompatActivity() {
     private lateinit var binding: ActivityHistoryBinding
     private val adapter = HistoryAdapter(
         onData = {
-            if (it.dataFile.exists()) shareFiles(listOf(it.dataFile), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            if (it.dataFile.exists()) shareFiles(listOf(it.dataFile), "text/csv")
             else Toast.makeText(this, "Data file missing", Toast.LENGTH_SHORT).show()
         },
         onVideo = {
