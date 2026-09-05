@@ -53,62 +53,92 @@
             android:contentDescription="@string/disconnect" />
     </LinearLayout>
 
-    <!-- Camera preview with timestamp overlay -->
     <FrameLayout
         android:layout_width="match_parent"
         android:layout_height="0dp"
-        android:layout_weight="1">
+        android:layout_weight="1"
+        android:background="#000000">
 
         <TextureView
             android:id="@+id/cameraPreview"
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
 
-        <!-- Timestamp overlay — dark background ensures readability on any surface -->
-        <TextView
-            android:id="@+id/timestampText"
-            android:layout_width="wrap_content"
+        <!-- Camera overlay controls (top) -->
+        <FrameLayout
+            android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_gravity="top|start"
-            android:layout_margin="12dp"
-            android:padding="6dp"
-            android:paddingHorizontal="10dp"
-            android:background="#8C000000"
-            android:textColor="#FFFFFF"
-            android:textSize="13sp"
-            android:fontFamily="monospace"
-            android:text="0000-00-00  00:00:00" />
+            android:padding="16dp">
+            
+            <ImageButton
+                android:id="@+id/flashBtn"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_gravity="start|top"
+                android:src="@android:drawable/ic_menu_always_invoke_with_default_browser" 
+                android:background="?attr/selectableItemBackgroundBorderless"
+                app:tint="#FFFFFF"
+                android:contentDescription="Flash"/>
+
+            <ImageButton
+                android:id="@+id/switchCameraBtn"
+                android:layout_width="48dp"
+                android:layout_height="48dp"
+                android:layout_gravity="end|top"
+                android:src="@android:drawable/ic_menu_camera" 
+                android:background="?attr/selectableItemBackgroundBorderless"
+                app:tint="#FFFFFF"
+                android:contentDescription="Switch Camera"/>
+        </FrameLayout>
+
+        <!-- Camera overlay controls (bottom) -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:orientation="vertical"
+            android:gravity="center"
+            android:paddingBottom="32dp"
+            android:background="@drawable/bg_gradient_bottom">
+            
+            <TextView
+                android:id="@+id/timestampText"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginBottom="24dp"
+                android:padding="6dp"
+                android:paddingHorizontal="10dp"
+                android:background="#8C000000"
+                android:textColor="#FFFFFF"
+                android:textSize="14sp"
+                android:fontFamily="monospace"
+                android:text="00-00-0000 00:00:00:000" />
+
+            <!-- Using a FrameLayout to make a circular button that can swap states -->
+            <FrameLayout
+                android:id="@+id/recordBtnContainer"
+                android:layout_width="80dp"
+                android:layout_height="80dp"
+                android:background="@drawable/bg_record_btn_outer">
+                
+                <View
+                    android:id="@+id/recordBtnInner"
+                    android:layout_width="60dp"
+                    android:layout_height="60dp"
+                    android:layout_gravity="center"
+                    android:background="@drawable/bg_record_btn_inner" />
+            </FrameLayout>
+
+            <TextView
+                android:id="@+id/recordBtnLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Start"
+                android:layout_marginTop="8dp"
+                android:textColor="#FFFFFF"
+                android:textStyle="bold"
+                android:textSize="16sp"/>
+
+        </LinearLayout>
     </FrameLayout>
-
-    <!-- Controls -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal"
-        android:padding="16dp"
-        android:background="#FFFFFF"
-        android:elevation="4dp">
-
-        <Button
-            android:id="@+id/startBtn"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:layout_marginEnd="8dp"
-            android:text="@string/start"
-            android:backgroundTint="#22C55E"
-            android:textColor="#FFFFFF"
-            android:textStyle="bold" />
-
-        <Button
-            android:id="@+id/stopBtn"
-            android:layout_width="0dp"
-            android:layout_height="wrap_content"
-            android:layout_weight="1"
-            android:text="@string/stop"
-            android:backgroundTint="#EF4444"
-            android:textColor="#FFFFFF"
-            android:textStyle="bold"
-            android:enabled="false" />
-    </LinearLayout>
 </LinearLayout>

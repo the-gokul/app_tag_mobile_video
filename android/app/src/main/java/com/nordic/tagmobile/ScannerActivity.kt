@@ -8,9 +8,13 @@ import android.os.Bundle
 import android.view.LayoutInflater
 import android.view.View
 import android.view.ViewGroup
+import android.widget.ArrayAdapter
+import android.widget.Button
+import android.widget.Spinner
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.recyclerview.widget.DiffUtil
@@ -99,8 +103,7 @@ class ScannerActivity : AppCompatActivity() {
                     rssi = pendingRssi,
                 )
                 TagSession.resetRecording()
-                startActivity(Intent(this@ScannerActivity, DeviceActivity::class.java))
-                finish()
+                showAssignProfileDialog()
             }
         }
 
@@ -176,6 +179,48 @@ class ScannerActivity : AppCompatActivity() {
         bleScanner.stop()
         TagLogger.log(LogCategory.BLE, "CONNECT_ATTEMPT", "$name ${device.address}")
         bleManager.connectTag(device)
+    }
+
+    private fun showAssignProfileDialog() {
+        val profiles = com.nordic.tagmobile.model.UserProfile.loadAll(this)
+        
+        val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_assign_profile, null)
+        val spinner = dialogView.findViewById<Spinner>(R.id.profileSpinner)
+        val emptyText = dialogView.findViewById<TextView>(R.id.emptyProfilesText)
+        val cancelBtn = dialogView.findViewById<Button>(R.id.cancelBtn)
+        val assignBtn = dialogView.findViewById<Button>(R.id.assignBtn)
+
+        if (profiles.isEmpty()) {
+            spinner.visibility = View.GONE
+            emptyText.visibility = View.VISIBLE
+            assignBtn.isEnabled = false
+        } else {
+            val names = profiles.map { "${it.dogName} (${it.name})" }
+            spinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names)
+        }
+
+        val dialog = AlertDialog.Builder(this)
+            .setView(dialogView)
+            .setCancelable(false)
+            .create()
+
+        cancelBtn.setOnClickListener {
+            dialog.dismiss()
+            bleManager.disconnectTag()
+            TagSession.clearConnection()
+        }
+
+        assignBtn.setOnClickListener {
+            val selectedIdx = spinner.selectedItemPosition
+            if (selectedIdx >= 0 && selectedIdx < profiles.size) {
+                TagSession.userProfile = profiles[selectedIdx]
+                dialog.dismiss()
+                startActivity(Intent(this@ScannerActivity, DeviceActivity::class.java))
+                finish()
+            }
+        }
+
+        dialog.show()
     }
 
     companion object {

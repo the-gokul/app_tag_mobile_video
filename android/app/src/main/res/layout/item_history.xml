@@ -64,36 +64,60 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:orientation="horizontal"
-            android:layout_marginTop="10dp">
+            android:layout_marginTop="10dp"
+            android:weightSum="4">
 
             <Button
-                android:id="@+id/shareCsvBtn"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:id="@+id/dataBtn"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:text="@string/share_csv"
-                android:textSize="12sp" />
+                android:text="Data"
+                android:textColor="#00A9CE"
+                android:textSize="12sp"
+                app:icon="@drawable/ic_menu"
+                app:iconTint="#00A9CE"
+                app:iconGravity="textStart" />
 
             <Button
-                android:id="@+id/shareLogBtn"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:id="@+id/videoBtn"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:layout_marginStart="6dp"
-                android:text="@string/share_log"
-                android:textSize="12sp" />
+                android:text="Video"
+                android:textColor="#00A9CE"
+                android:textSize="12sp"
+                app:icon="@android:drawable/ic_media_play"
+                app:iconTint="#00A9CE"
+                app:iconGravity="textStart" />
 
             <Button
-                android:id="@+id/shareBothBtn"
-                style="@style/Widget.MaterialComponents.Button.OutlinedButton"
+                android:id="@+id/infoBtn"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
                 android:layout_width="0dp"
                 android:layout_height="wrap_content"
                 android:layout_weight="1"
-                android:layout_marginStart="6dp"
-                android:text="@string/share_both"
-                android:textSize="12sp" />
+                android:text="Info"
+                android:textColor="#00A9CE"
+                android:textSize="12sp"
+                app:icon="@android:drawable/ic_dialog_info"
+                app:iconTint="#00A9CE"
+                app:iconGravity="textStart" />
+
+            <Button
+                android:id="@+id/syncBtn"
+                style="@style/Widget.MaterialComponents.Button.TextButton"
+                android:layout_width="0dp"
+                android:layout_height="wrap_content"
+                android:layout_weight="1"
+                android:text="Sync"
+                android:textColor="#00A9CE"
+                android:textSize="12sp"
+                app:icon="@android:drawable/ic_popup_sync"
+                app:iconTint="#00A9CE"
+                app:iconGravity="textStart" />
         </LinearLayout>
     </LinearLayout>
 </com.google.android.material.card.MaterialCardView>

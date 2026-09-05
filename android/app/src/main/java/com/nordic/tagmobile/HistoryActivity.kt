@@ -23,29 +23,35 @@ class HistoryActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityHistoryBinding
     private val adapter = HistoryAdapter(
-        onShareCsv = { shareFiles(listOf(it.csvFile), "text/csv") },
-        onShareLog = {
-            if (it.logFile.exists()) {
-                shareFiles(listOf(it.logFile), "text/plain")
-            } else {
-                Toast.makeText(this, R.string.log_missing, Toast.LENGTH_SHORT).show()
-            }
+        onData = {
+            if (it.dataFile.exists()) shareFiles(listOf(it.dataFile), "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            else Toast.makeText(this, "Data file missing", Toast.LENGTH_SHORT).show()
         },
-        onShareBoth = {
-            val files = buildList {
-                add(it.csvFile)
-                if (it.logFile.exists()) add(it.logFile)
-            }
-            shareFiles(files, "*/*")
+        onVideo = {
+            if (it.videoFile?.exists() == true) shareFiles(listOf(it.videoFile), "video/*")
+            else Toast.makeText(this, "Video file missing", Toast.LENGTH_SHORT).show()
         },
-        onDelete = {
+        onInfo = {
             androidx.appcompat.app.AlertDialog.Builder(this)
-                .setTitle("Delete Recording")
-                .setMessage("Are you sure you want to permanently delete ${it.baseName}?")
-                .setPositiveButton("Delete") { _, _ ->
-                    RecordingStore.deleteEntry(this, it)
+                .setTitle("Session Info")
+                .setMessage("Name: ${it.baseName}\nStatus: ${it.status}\nPackets: ${it.packetCount}\nSamples: ${it.sampleCount}\nData: ${if (it.dataFile.exists()) "Yes" else "No"}\nVideo: ${if (it.videoFile?.exists() == true) "Yes" else "No"}")
+                .setPositiveButton("OK", null)
+                .show()
+        },
+        onSync = {
+            Toast.makeText(this, "Syncing ${it.baseName} to cloud...", Toast.LENGTH_SHORT).show()
+        },
+        onDelete = { item ->
+            val options = arrayOf("Delete Data Only", "Delete Video Only", "Delete Both")
+            androidx.appcompat.app.AlertDialog.Builder(this)
+                .setTitle("Delete ${item.baseName}")
+                .setItems(options) { _, which ->
+                    when (which) {
+                        0 -> { item.dataFile.delete(); Toast.makeText(this, "Data deleted", Toast.LENGTH_SHORT).show() }
+                        1 -> { item.videoFile?.delete(); Toast.makeText(this, "Video deleted", Toast.LENGTH_SHORT).show() }
+                        2 -> { RecordingStore.deleteEntry(this, item); Toast.makeText(this, "Deleted entirely", Toast.LENGTH_SHORT).show() }
+                    }
                     reload()
-                    Toast.makeText(this, "Deleted ${it.baseName}", Toast.LENGTH_SHORT).show()
                 }
                 .setNegativeButton("Cancel", null)
                 .show()
@@ -106,9 +112,10 @@ class HistoryActivity : AppCompatActivity() {
     }
 
     private class HistoryAdapter(
-        private val onShareCsv: (HistoryEntry) -> Unit,
-        private val onShareLog: (HistoryEntry) -> Unit,
-        private val onShareBoth: (HistoryEntry) -> Unit,
+        private val onData: (HistoryEntry) -> Unit,
+        private val onVideo: (HistoryEntry) -> Unit,
+        private val onInfo: (HistoryEntry) -> Unit,
+        private val onSync: (HistoryEntry) -> Unit,
         private val onDelete: (HistoryEntry) -> Unit,
     ) : RecyclerView.Adapter<HistoryAdapter.Holder>() {
 
@@ -133,9 +140,10 @@ class HistoryActivity : AppCompatActivity() {
                 "${dateFmt.format(Date(item.savedAtMs))} · " +
                     "Packets: ${item.packetCount} · Samples: ${item.sampleCount}"
             holder.status.text = item.status
-            holder.shareCsv.setOnClickListener { onShareCsv(item) }
-            holder.shareLog.setOnClickListener { onShareLog(item) }
-            holder.shareBoth.setOnClickListener { onShareBoth(item) }
+            holder.dataBtn.setOnClickListener { onData(item) }
+            holder.videoBtn.setOnClickListener { onVideo(item) }
+            holder.infoBtn.setOnClickListener { onInfo(item) }
+            holder.syncBtn.setOnClickListener { onSync(item) }
             holder.deleteBtn.setOnClickListener { onDelete(item) }
         }
 
@@ -145,9 +153,10 @@ class HistoryActivity : AppCompatActivity() {
             val title: TextView = view.findViewById(R.id.itemTitle)
             val meta: TextView = view.findViewById(R.id.itemMeta)
             val status: TextView = view.findViewById(R.id.itemStatus)
-            val shareCsv: Button = view.findViewById(R.id.shareCsvBtn)
-            val shareLog: Button = view.findViewById(R.id.shareLogBtn)
-            val shareBoth: Button = view.findViewById(R.id.shareBothBtn)
+            val dataBtn: Button = view.findViewById(R.id.dataBtn)
+            val videoBtn: Button = view.findViewById(R.id.videoBtn)
+            val infoBtn: Button = view.findViewById(R.id.infoBtn)
+            val syncBtn: Button = view.findViewById(R.id.syncBtn)
             val deleteBtn: android.widget.ImageButton = view.findViewById(R.id.deleteBtn)
         }
     }

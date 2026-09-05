@@ -37,6 +37,20 @@ android {
     lint {
         abortOnError = false
     }
+
+    packaging {
+        resources {
+            excludes += "META-INF/DEPENDENCIES"
+            excludes += "META-INF/LICENSE"
+            excludes += "META-INF/LICENSE.txt"
+            excludes += "META-INF/license.txt"
+            excludes += "META-INF/NOTICE"
+            excludes += "META-INF/NOTICE.txt"
+            excludes += "META-INF/notice.txt"
+            excludes += "META-INF/ASL2.0"
+            excludes += "META-INF/*.kotlin_module"
+        }
+    }
 }
 
 dependencies {
@@ -51,4 +65,8 @@ dependencies {
     // Nordic BLE stack (Maven — no Toolbox clone)
     implementation("no.nordicsemi.android:ble-ktx:2.9.0")
     implementation("no.nordicsemi.android.support.v18:scanner:1.6.0")
+
+    // Apache POI for Excel export
+    implementation("org.apache.poi:poi:5.2.3")
+    implementation("org.apache.poi:poi-ooxml:5.2.3")
 }

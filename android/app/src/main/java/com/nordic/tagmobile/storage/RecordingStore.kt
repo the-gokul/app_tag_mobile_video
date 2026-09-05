@@ -11,8 +11,9 @@ import java.util.Locale
 
 data class HistoryEntry(
     val baseName: String,
-    val csvFile: File,
+    val dataFile: File,
     val logFile: File,
+    val videoFile: File?,
     val packetCount: Int,
     val sampleCount: Int,
     val status: String,
@@ -22,11 +23,14 @@ data class HistoryEntry(
 object RecordingStore {
     private const val META_SUFFIX = ".meta.json"
 
-    private fun csvDir(context: Context): File =
-        File(context.filesDir, "csv").also { it.mkdirs() }
+    private fun dataDir(context: Context): File =
+        File(context.filesDir, "data").also { it.mkdirs() }
 
     private fun logsDir(context: Context): File =
         File(context.filesDir, "logs").also { it.mkdirs() }
+
+    private fun videosDir(context: Context): File =
+        File(context.filesDir, "videos").also { it.mkdirs() }
 
     fun makeBaseName(
         deviceName: String,
@@ -40,28 +44,36 @@ object RecordingStore {
         else "${safe}_${datePart}"
     }
 
-    fun csvFile(context: Context, baseName: String): File =
-        File(csvDir(context), "$baseName.csv")
+    fun dataFile(context: Context, baseName: String): File =
+        File(dataDir(context), "$baseName.xlsx")
 
     fun logFile(context: Context, baseName: String): File =
         File(logsDir(context), "$baseName.log")
 
+    fun findVideoFile(context: Context, baseName: String): File? {
+        val dir = videosDir(context)
+        val mp4 = File(dir, "$baseName.mp4")
+        if (mp4.exists()) return mp4
+        val webm = File(dir, "$baseName.webm")
+        if (webm.exists()) return webm
+        return null
+    }
+
     private fun metaFile(context: Context, baseName: String): File =
-        File(csvDir(context), "$baseName$META_SUFFIX")
+        File(dataDir(context), "$baseName$META_SUFFIX")
 
     fun saveRecording(
         context: Context,
         baseName: String,
-        csvContent: String,
         logContent: String,
         packetCount: Int,
         sampleCount: Int,
         status: String,
     ): HistoryEntry {
-        val csv = csvFile(context, baseName)
-        val log = logFile(context, baseName)
-        csv.writeText(csvContent, Charsets.UTF_8)
-        log.writeText(logContent, Charsets.UTF_8)
+        val dataF = dataFile(context, baseName)
+        val logF = logFile(context, baseName)
+        val vidF = findVideoFile(context, baseName)
+        logF.writeText(logContent, Charsets.UTF_8)
         val savedAt = System.currentTimeMillis()
         metaFile(context, baseName).writeText(
             JSONObject()
@@ -76,12 +88,13 @@ object RecordingStore {
         TagLogger.log(
             LogCategory.FILE,
             "AUTO_SAVE_OK",
-            "csv=${csv.name} log=${log.name} packets=$packetCount samples=$sampleCount",
+            "data=${dataF.name} log=${logF.name} packets=$packetCount samples=$sampleCount",
         )
         return HistoryEntry(
             baseName = baseName,
-            csvFile = csv,
-            logFile = log,
+            dataFile = dataF,
+            logFile = logF,
+            videoFile = vidF,
             packetCount = packetCount,
             sampleCount = sampleCount,
             status = status,
@@ -90,18 +103,18 @@ object RecordingStore {
     }
 
     fun listHistory(context: Context): List<HistoryEntry> {
-        val csvRoot = csvDir(context)
+        val dataRoot = dataDir(context)
         val logsRoot = logsDir(context)
-        val bases = csvRoot.listFiles()
-            ?.filter { it.isFile && it.name.endsWith(".csv") }
-            ?.map { it.name.removeSuffix(".csv") }
+        val bases = dataRoot.listFiles()
+            ?.filter { it.isFile && it.name.endsWith(".xlsx") }
+            ?.map { it.name.removeSuffix(".xlsx") }
             ?.distinct()
             ?: emptyList()
 
         return bases.mapNotNull { base ->
-            val csv = File(csvRoot, "$base.csv")
-            val log = File(logsRoot, "$base.log")
-            if (!csv.exists()) return@mapNotNull null
+            val dataF = File(dataRoot, "$base.xlsx")
+            val logF = File(logsRoot, "$base.log")
+            if (!dataF.exists()) return@mapNotNull null
             val meta = metaFile(context, base)
             val (packets, samples, status, savedAt) = if (meta.exists()) {
                 try {
@@ -110,18 +123,19 @@ object RecordingStore {
                         o.optInt("packetCount", 0),
                         o.optInt("sampleCount", 0),
                         o.optString("status", "Saved"),
-                        o.optLong("savedAtMs", csv.lastModified()),
+                        o.optLong("savedAtMs", dataF.lastModified()),
                     )
                 } catch (_: Exception) {
-                    Meta(0, 0, "Saved", csv.lastModified())
+                    Meta(0, 0, "Saved", dataF.lastModified())
                 }
             } else {
-                Meta(0, 0, "Saved", csv.lastModified())
+                Meta(0, 0, "Saved", dataF.lastModified())
             }
             HistoryEntry(
                 baseName = base,
-                csvFile = csv,
-                logFile = log,
+                dataFile = dataF,
+                logFile = logF,
+                videoFile = findVideoFile(context, base),
                 packetCount = packets,
                 sampleCount = samples,
                 status = status,
@@ -138,8 +152,9 @@ object RecordingStore {
     )
 
     fun deleteEntry(context: Context, entry: HistoryEntry) {
-        entry.csvFile.delete()
+        entry.dataFile.delete()
         entry.logFile.delete()
+        entry.videoFile?.delete()
         metaFile(context, entry.baseName).delete()
     }
 }

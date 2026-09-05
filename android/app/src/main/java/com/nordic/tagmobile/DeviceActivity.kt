@@ -47,6 +47,8 @@ class DeviceActivity : AppCompatActivity() {
     private var backgroundHandler: Handler? = null
     private var videoFile: File? = null
     private var isRecording = false
+    private var isFlashOn = false
+    private var isFrontCamera = false
     private var timestampHandler: Handler? = null
     private val timestampRunnable = object : Runnable {
         override fun run() {
@@ -145,13 +147,15 @@ class DeviceActivity : AppCompatActivity() {
         binding.deviceTitle.text = device.name
         binding.backBtn.setOnClickListener { finish() }
         binding.deviceMenuBtn.setOnClickListener { showDeviceMenu(it) }
-        binding.startBtn.setOnClickListener { startRecording() }
-        binding.stopBtn.setOnClickListener { stopRecording() }
+        
+        binding.recordBtnContainer.setOnClickListener {
+            if (!isRecording) startRecording() else stopRecording()
+        }
+        binding.flashBtn.setOnClickListener { toggleFlash() }
+        binding.switchCameraBtn.setOnClickListener { switchCamera() }
 
         bleManager.listener = bleListener
         
-        binding.startBtn.isEnabled = true
-        binding.stopBtn.isEnabled = false
         binding.timestampText.text = currentTimestamp()
 
         timestampHandler = Handler(mainLooper)
@@ -198,10 +202,23 @@ class DeviceActivity : AppCompatActivity() {
         }
         val manager = getSystemService(CAMERA_SERVICE) as CameraManager
         val cameraId = manager.cameraIdList.firstOrNull { id ->
-            manager.getCameraCharacteristics(id)
-                .get(CameraCharacteristics.LENS_FACING) == CameraCharacteristics.LENS_FACING_BACK
+            val facing = manager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING)
+            facing == if (isFrontCamera) CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
         } ?: manager.cameraIdList.firstOrNull() ?: return
         manager.openCamera(cameraId, cameraStateCallback, backgroundHandler)
+    }
+
+    private fun toggleFlash() {
+        if (isFrontCamera) return
+        isFlashOn = !isFlashOn
+        startPreview()
+    }
+
+    private fun switchCamera() {
+        isFrontCamera = !isFrontCamera
+        isFlashOn = false
+        closeCamera()
+        openCamera()
     }
 
     private fun closeCamera() {
@@ -215,6 +232,7 @@ class DeviceActivity : AppCompatActivity() {
         val previewSurface = Surface(texture)
         val request = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW).apply {
             addTarget(previewSurface)
+            set(CaptureRequest.FLASH_MODE, if (isFlashOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF)
         }
         cameraDevice!!.createCaptureSession(
             listOf(previewSurface),
@@ -309,8 +327,8 @@ class DeviceActivity : AppCompatActivity() {
 
         // Setup video recording
         isRecording = true
-        binding.startBtn.isEnabled = false
-        binding.stopBtn.isEnabled = true
+        binding.recordBtnInner.setBackgroundResource(R.drawable.bg_record_btn_inner_active)
+        binding.recordBtnLabel.text = getString(R.string.stop)
 
         val profile = TagSession.userProfile
         val deviceName = TagSession.connectedDevice?.name?.replace(Regex("[^A-Za-z0-9_-]"), "_") ?: "Tag"
@@ -342,6 +360,7 @@ class DeviceActivity : AppCompatActivity() {
         val request = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
             addTarget(previewSurface)
             addTarget(recorderSurface)
+            set(CaptureRequest.FLASH_MODE, if (isFlashOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF)
         }
 
         captureSession?.close()
@@ -365,8 +384,8 @@ class DeviceActivity : AppCompatActivity() {
     private fun stopRecording() {
         if (!isRecording) return
         isRecording = false
-        binding.startBtn.isEnabled = true
-        binding.stopBtn.isEnabled = false
+        binding.recordBtnInner.setBackgroundResource(R.drawable.bg_record_btn_inner)
+        binding.recordBtnLabel.text = getString(R.string.start)
 
         // Stop BLE
         bleManager.stopRecording()
@@ -417,7 +436,17 @@ class DeviceActivity : AppCompatActivity() {
                 ?: "Tag"
             val profilePrefix = TagSession.userProfile.safeFileName
             val baseName = RecordingStore.makeBaseName(deviceName, profilePrefix = profilePrefix)
-            val csv = CsvExporter.build(TagSession.receivedRows)
+            val dataFile = RecordingStore.dataFile(this, baseName)
+            
+            com.nordic.tagmobile.protocol.ExcelExporter.exportToExcel(
+                file = dataFile,
+                rows = TagSession.receivedRows,
+                profile = TagSession.userProfile,
+                packetCount = report.packetCount,
+                sampleCount = report.sampleCount,
+                status = report.statusShort
+            )
+            
             val logBody = buildString {
                 appendLine("Tag session log")
                 appendLine("base_name=$baseName")
@@ -432,7 +461,6 @@ class DeviceActivity : AppCompatActivity() {
             val entry = RecordingStore.saveRecording(
                 context = this,
                 baseName = baseName,
-                csvContent = csv,
                 logContent = logBody,
                 packetCount = report.packetCount,
                 sampleCount = report.sampleCount,
@@ -447,7 +475,7 @@ class DeviceActivity : AppCompatActivity() {
             TagSession.recordingState = RecordingState.RECEIVED
             TagSession.lastFeedbackText =
                 report.feedbackText.replace(
-                    "Saved to History (CSV + log)",
+                    "Saved to History",
                     "Save failed: ${e.message}",
                 )
             Toast.makeText(this, "Auto-save failed: ${e.message}", Toast.LENGTH_LONG).show()
@@ -455,7 +483,7 @@ class DeviceActivity : AppCompatActivity() {
     }
 
     private fun currentTimestamp(): String {
-        val fmt = SimpleDateFormat("yyyy-MM-dd  HH:mm:ss", Locale.US)
+        val fmt = SimpleDateFormat("dd-MM-yyyy HH:mm:ss:SSS", Locale.US)
         return fmt.format(Date())
     }
 
