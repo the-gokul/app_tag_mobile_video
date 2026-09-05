@@ -54,7 +54,8 @@ class MainActivity : AppCompatActivity() {
         setSupportActionBar(binding.toolbar)
 
         // Load persisted profile + camera config into session
-        TagSession.userProfile = com.nordic.tagmobile.model.UserProfile.load(this)
+        val profiles = com.nordic.tagmobile.model.UserProfile.loadAll(this)
+        TagSession.userProfile = profiles.firstOrNull() ?: com.nordic.tagmobile.model.UserProfile()
         TagSession.cameraConfig = com.nordic.tagmobile.model.CameraConfig.load(this)
 
         // First-run: force profile setup

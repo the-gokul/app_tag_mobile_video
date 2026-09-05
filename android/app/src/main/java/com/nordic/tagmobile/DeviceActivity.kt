@@ -26,7 +26,6 @@ import com.nordic.tagmobile.log.LogCategory
 import com.nordic.tagmobile.log.TagLogger
 import com.nordic.tagmobile.model.CameraConfig
 import com.nordic.tagmobile.model.RecordingState
-import com.nordic.tagmobile.protocol.CsvExporter
 import com.nordic.tagmobile.protocol.SensorPacketParser
 import com.nordic.tagmobile.protocol.SensorPacketParser.HEADER_SIZE
 import com.nordic.tagmobile.storage.RecordingStore
