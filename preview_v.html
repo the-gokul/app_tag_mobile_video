@@ -1,0 +1,539 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Tag Mobile Video Demo</title>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+        
+        :root {
+            --bg-color: #0f172a;
+            --surface-color: rgba(30, 41, 59, 0.7);
+            --primary-color: #3b82f6;
+            --primary-hover: #2563eb;
+            --danger-color: #ef4444;
+            --text-main: #f8fafc;
+            --text-muted: #94a3b8;
+            --glass-border: rgba(255, 255, 255, 0.1);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            font-family: 'Inter', sans-serif;
+        }
+
+        body {
+            background-color: #000;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            color: var(--text-main);
+            overflow: hidden;
+        }
+
+        /* Mobile Device Container */
+        .device {
+            width: 375px;
+            height: 812px;
+            background: var(--bg-color);
+            border-radius: 40px;
+            position: relative;
+            overflow: hidden;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5), 0 0 0 10px #222;
+            display: flex;
+            flex-direction: column;
+            background-image: radial-gradient(circle at top right, #1e3a8a 0%, transparent 40%),
+                              radial-gradient(circle at bottom left, #0f766e 0%, transparent 40%);
+        }
+
+        /* Status Bar Mock */
+        .status-bar {
+            height: 44px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 0 24px;
+            font-size: 14px;
+            font-weight: 600;
+            z-index: 100;
+        }
+
+        /* Screen Container */
+        .screen {
+            flex: 1;
+            display: none;
+            flex-direction: column;
+            padding: 20px;
+            animation: fadeIn 0.3s ease-out;
+            position: absolute;
+            top: 44px;
+            bottom: 0;
+            left: 0;
+            right: 0;
+            overflow-y: auto;
+        }
+
+        .screen.active {
+            display: flex;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Top App Bar */
+        .app-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 24px;
+        }
+
+        .app-bar h1 {
+            font-size: 24px;
+            font-weight: 700;
+        }
+
+        .menu-btn, .back-btn {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 24px;
+            cursor: pointer;
+            padding: 8px;
+            border-radius: 50%;
+            transition: background 0.2s;
+        }
+
+        .menu-btn:hover, .back-btn:hover {
+            background: rgba(255,255,255,0.1);
+        }
+
+        /* Glass Cards */
+        .card {
+            background: var(--surface-color);
+            backdrop-filter: blur(12px);
+            border: 1px solid var(--glass-border);
+            border-radius: 20px;
+            padding: 20px;
+            margin-bottom: 16px;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .card:active {
+            transform: scale(0.98);
+        }
+
+        .card h2 {
+            font-size: 18px;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .card p {
+            color: var(--text-muted);
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        /* Buttons */
+        .btn {
+            background: var(--primary-color);
+            color: white;
+            border: none;
+            border-radius: 12px;
+            padding: 16px;
+            font-size: 16px;
+            font-weight: 600;
+            width: 100%;
+            cursor: pointer;
+            transition: all 0.2s;
+            margin-top: auto;
+            box-shadow: 0 4px 14px rgba(59, 130, 246, 0.4);
+        }
+
+        .btn:hover {
+            background: var(--primary-hover);
+        }
+
+        .btn.danger {
+            background: var(--danger-color);
+            box-shadow: 0 4px 14px rgba(239, 68, 68, 0.4);
+        }
+
+        .btn.secondary {
+            background: rgba(255,255,255,0.1);
+            box-shadow: none;
+        }
+
+        /* specific to scanner */
+        .device-list {
+            list-style: none;
+        }
+        
+        .device-item {
+            padding: 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            cursor: pointer;
+        }
+
+        .device-item:hover {
+            background: rgba(255,255,255,0.05);
+        }
+
+        /* Camera Viewport */
+        .camera-view {
+            width: 100%;
+            height: 300px;
+            background: #000;
+            border-radius: 20px;
+            margin-bottom: 20px;
+            position: relative;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            border: 2px solid var(--glass-border);
+            overflow: hidden;
+        }
+
+        .camera-overlay {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(0,0,0,0.5);
+            padding: 4px 8px;
+            border-radius: 8px;
+            font-size: 12px;
+            font-weight: bold;
+        }
+        
+        .rec-indicator {
+            width: 10px;
+            height: 10px;
+            background: #ef4444;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 6px;
+            animation: blink 1s infinite;
+            display: none;
+        }
+
+        @keyframes blink {
+            0% { opacity: 1; }
+            50% { opacity: 0; }
+            100% { opacity: 1; }
+        }
+
+        /* Data display */
+        .data-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-bottom: 20px;
+        }
+
+        .data-box {
+            background: rgba(0,0,0,0.2);
+            padding: 12px;
+            border-radius: 12px;
+            text-align: center;
+        }
+
+        .data-box .value {
+            font-size: 20px;
+            font-weight: 700;
+            margin-top: 4px;
+        }
+
+        /* Dropdown Menu */
+        .dropdown {
+            position: absolute;
+            top: 60px;
+            right: 20px;
+            background: var(--surface-color);
+            backdrop-filter: blur(20px);
+            border: 1px solid var(--glass-border);
+            border-radius: 12px;
+            width: 200px;
+            display: none;
+            flex-direction: column;
+            z-index: 1000;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
+        }
+
+        .dropdown.show {
+            display: flex;
+            animation: fadeIn 0.2s ease-out;
+        }
+
+        .dropdown-item {
+            padding: 16px;
+            border-bottom: 1px solid rgba(255,255,255,0.05);
+            cursor: pointer;
+            font-weight: 500;
+        }
+        
+        .dropdown-item:last-child {
+            border-bottom: none;
+        }
+
+        .dropdown-item:hover {
+            background: rgba(255,255,255,0.1);
+        }
+    </style>
+</head>
+<body>
+
+    <div class="device">
+        <div class="status-bar">
+            <span>9:41</span>
+            <span>LTE 🔋</span>
+        </div>
+
+        <!-- MAIN ACTIVITY -->
+        <div id="main-screen" class="screen active">
+            <div class="app-bar">
+                <h1>Tag Video App</h1>
+                <button class="menu-btn" onclick="toggleMenu('main-menu')">⋮</button>
+            </div>
+            
+            <div class="dropdown" id="main-menu">
+                <div class="dropdown-item" onclick="navigate('history-screen'); toggleMenu('main-menu')">History</div>
+                <div class="dropdown-item" onclick="navigate('profile-screen'); toggleMenu('main-menu')">Profile</div>
+                <div class="dropdown-item" onclick="toggleMenu('main-menu')">Settings</div>
+                <div class="dropdown-item" onclick="toggleMenu('main-menu')">Log Viewer</div>
+            </div>
+
+            <div class="card">
+                <h2>Welcome</h2>
+                <p>Connect to a Tag device to start recording synchronized BLE data and Video.</p>
+            </div>
+
+            <div class="card">
+                <h2>Recent Devices</h2>
+                <p>No recent devices found. Please scan to connect.</p>
+            </div>
+
+            <button class="btn" onclick="navigate('scanner-screen')" style="margin-top: 20px;">Scan for Tags</button>
+        </div>
+
+        <!-- SCANNER ACTIVITY -->
+        <div id="scanner-screen" class="screen">
+            <div class="app-bar">
+                <button class="back-btn" onclick="navigate('main-screen')">←</button>
+                <h1>Scanning...</h1>
+                <div style="width: 40px;"></div>
+            </div>
+
+            <div class="card" style="padding: 0; overflow: hidden;">
+                <ul class="device-list">
+                    <li class="device-item" onclick="navigate('device-screen')">
+                        <div>
+                            <div style="font-weight: 600;">Tag (Video Supported)</div>
+                            <div style="font-size: 12px; color: #94a3b8;">AA:BB:CC:DD:EE:FF</div>
+                        </div>
+                        <div style="color: #4ade80;">-45 dBm</div>
+                    </li>
+                    <li class="device-item">
+                        <div>
+                            <div style="font-weight: 600;">Unknown Device</div>
+                            <div style="font-size: 12px; color: #94a3b8;">11:22:33:44:55:66</div>
+                        </div>
+                        <div style="color: #fbbf24;">-70 dBm</div>
+                    </li>
+                </ul>
+            </div>
+        </div>
+
+        <!-- DEVICE ACTIVITY -->
+        <div id="device-screen" class="screen">
+            <div class="app-bar">
+                <button class="back-btn" onclick="navigate('main-screen')">←</button>
+                <h1>Tag Device</h1>
+                <button class="menu-btn" onclick="toggleMenu('device-menu')">⚙️</button>
+            </div>
+
+            <div class="dropdown" id="device-menu">
+                <div class="dropdown-item" onclick="toggleMenu('device-menu')">Camera Config</div>
+                <div class="dropdown-item" onclick="toggleMenu('device-menu')">Custom Data</div>
+            </div>
+
+            <div class="camera-view">
+                <div class="camera-overlay">
+                    <span class="rec-indicator" id="rec-dot"></span>
+                    <span id="rec-time">1080p 60fps</span>
+                </div>
+                <p style="color: #475569;">[ Camera Feed ]</p>
+            </div>
+
+            <div class="data-grid">
+                <div class="data-box">
+                    <div style="font-size: 12px; color: #94a3b8;">Packets</div>
+                    <div class="value" id="packet-count">0</div>
+                </div>
+                <div class="data-box">
+                    <div style="font-size: 12px; color: #94a3b8;">Status</div>
+                    <div class="value" style="color: #4ade80;" id="conn-status">Connected</div>
+                </div>
+            </div>
+
+            <button class="btn" id="record-btn" onclick="toggleRecording()" style="margin-top: auto;">START RECORDING</button>
+        </div>
+
+        <!-- HISTORY ACTIVITY -->
+        <div id="history-screen" class="screen">
+            <div class="app-bar">
+                <button class="back-btn" onclick="navigate('main-screen')">←</button>
+                <h1>History</h1>
+                <div style="width: 40px;"></div>
+            </div>
+
+            <div class="card" style="padding: 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <div style="font-weight: 600;">Tag_2026-09-03_10-54</div>
+                    <span style="background: rgba(74, 222, 128, 0.2); color: #4ade80; padding: 2px 8px; border-radius: 10px; font-size: 12px;">No Loss</span>
+                </div>
+                <p style="font-size: 13px; margin-bottom: 12px;">Packets: 450 • Samples: 1200<br>Video: 00:01:15 (1080p)</p>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn secondary" style="padding: 8px; font-size: 14px;">Play Video</button>
+                    <button class="btn secondary" style="padding: 8px; font-size: 14px;">Share CSV/Log</button>
+                </div>
+            </div>
+            
+            <div class="card" style="padding: 16px;">
+                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+                    <div style="font-weight: 600;">Tag_2026-09-01_14-22</div>
+                    <span style="background: rgba(251, 191, 36, 0.2); color: #fbbf24; padding: 2px 8px; border-radius: 10px; font-size: 12px;">Gap</span>
+                </div>
+                <p style="font-size: 13px; margin-bottom: 12px;">Packets: 210 • Samples: 560<br>Missing ~3 packets.</p>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn secondary" style="padding: 8px; font-size: 14px;">Play Video</button>
+                    <button class="btn secondary" style="padding: 8px; font-size: 14px;">Share CSV/Log</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- PROFILE ACTIVITY -->
+        <div id="profile-screen" class="screen">
+            <div class="app-bar">
+                <button class="back-btn" onclick="navigate('main-screen')">←</button>
+                <h1>User Profile</h1>
+                <div style="width: 40px;"></div>
+            </div>
+
+            <div class="card">
+                <div style="width: 80px; height: 80px; background: rgba(255,255,255,0.1); border-radius: 50%; margin: 0 auto 16px auto; display: flex; align-items: center; justify-content: center; font-size: 32px;">👤</div>
+                <div style="margin-bottom: 16px;">
+                    <label style="font-size: 12px; color: #94a3b8; display: block; margin-bottom: 4px;">Name</label>
+                    <input type="text" value="John Doe" style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid var(--glass-border); color: white; padding: 12px; border-radius: 8px;">
+                </div>
+                <div>
+                    <label style="font-size: 12px; color: #94a3b8; display: block; margin-bottom: 4px;">Role / Info</label>
+                    <input type="text" value="Tester" style="width: 100%; background: rgba(0,0,0,0.2); border: 1px solid var(--glass-border); color: white; padding: 12px; border-radius: 8px;">
+                </div>
+            </div>
+
+            <button class="btn" onclick="navigate('main-screen')">Save Profile</button>
+        </div>
+
+    </div>
+
+    <script>
+        function navigate(screenId) {
+            document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+            document.getElementById(screenId).classList.add('active');
+            
+            // close any open menus
+            document.querySelectorAll('.dropdown').forEach(m => m.classList.remove('show'));
+        }
+
+        function toggleMenu(menuId) {
+            const menu = document.getElementById(menuId);
+            menu.classList.toggle('show');
+        }
+
+        let isRecording = false;
+        let packetInterval;
+        let packets = 0;
+        let seconds = 0;
+        let timeInterval;
+
+        function toggleRecording() {
+            const btn = document.getElementById('record-btn');
+            const dot = document.getElementById('rec-dot');
+            const timeDisplay = document.getElementById('rec-time');
+            const status = document.getElementById('conn-status');
+
+            if (!isRecording) {
+                // Start
+                isRecording = true;
+                btn.textContent = "STOP RECORDING";
+                btn.classList.add("danger");
+                dot.style.display = "inline-block";
+                status.textContent = "Recording...";
+                status.style.color = "#fbbf24";
+                
+                packets = 0;
+                seconds = 0;
+                document.getElementById('packet-count').textContent = packets;
+
+                packetInterval = setInterval(() => {
+                    packets += Math.floor(Math.random() * 5) + 1;
+                    document.getElementById('packet-count').textContent = packets;
+                }, 100);
+
+                timeInterval = setInterval(() => {
+                    seconds++;
+                    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
+                    const s = (seconds % 60).toString().padStart(2, '0');
+                    timeDisplay.textContent = `REC ${m}:${s}`;
+                }, 1000);
+
+            } else {
+                // Stop
+                isRecording = false;
+                btn.textContent = "START RECORDING";
+                btn.classList.remove("danger");
+                dot.style.display = "none";
+                timeDisplay.textContent = "1080p 60fps";
+                status.textContent = "Auto-saving...";
+                status.style.color = "#3b82f6";
+                
+                clearInterval(packetInterval);
+                clearInterval(timeInterval);
+
+                setTimeout(() => {
+                    status.textContent = "Saved to History";
+                    status.style.color = "#4ade80";
+                    setTimeout(() => {
+                        navigate('history-screen');
+                    }, 1500);
+                }, 1000);
+            }
+        }
+
+        // Close dropdowns if clicked outside
+        window.onclick = function(event) {
+            if (!event.target.matches('.menu-btn')) {
+                var dropdowns = document.getElementsByClassName("dropdown");
+                for (var i = 0; i < dropdowns.length; i++) {
+                    var openDropdown = dropdowns[i];
+                    if (openDropdown.classList.contains('show')) {
+                        openDropdown.classList.remove('show');
+                    }
+                }
+            }
+        }
+    </script>
+</body>
+</html>

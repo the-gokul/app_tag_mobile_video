@@ -24,7 +24,7 @@ object TagSession {
     var lastFeedbackText: String = ""
 
     // ── Profile & Camera ─────────────────────────────────────────────────────
-    var userProfile: UserProfile = UserProfile()
+    var activeProfile: UserProfile? = null
     var cameraConfig: CameraConfig = CameraConfig()
 
     fun resetRecording() {
