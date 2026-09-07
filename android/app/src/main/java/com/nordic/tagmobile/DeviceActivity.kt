@@ -303,7 +303,7 @@ class DeviceActivity : AppCompatActivity() {
         binding.cameraPreview.setTransform(matrix)
     }
 
-    /** Write rotation metadata so portrait clips play as portrait (and landscape as landscape). */
+    /** Degrees to bake into the landscape file so content is upright for the current hold. */
     private fun videoOrientationHint(): Int {
         val cameraId = activeCameraId ?: return if (isPortraitDisplay()) 90 else 0
         return try {
@@ -484,8 +484,11 @@ class DeviceActivity : AppCompatActivity() {
             CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH)
         }
 
-        // Prepare MediaRecorder before BLE Start so a camera failure does not leave the Tag streaming
-        val orientationHint = videoOrientationHint()
+        // Always save landscape pixels (width > height). Bake rotation into frames;
+        // do not rely on MediaRecorder orientation-hint metadata (breaks burned timestamp).
+        val videoW = maxOf(camProfile.videoFrameWidth, camProfile.videoFrameHeight)
+        val videoH = minOf(camProfile.videoFrameWidth, camProfile.videoFrameHeight)
+        val contentRotation = videoOrientationHint()
         val mr: MediaRecorder
         try {
             @Suppress("DEPRECATION")
@@ -493,10 +496,10 @@ class DeviceActivity : AppCompatActivity() {
                 setVideoSource(MediaRecorder.VideoSource.SURFACE)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-                setVideoSize(camProfile.videoFrameWidth, camProfile.videoFrameHeight)
+                setVideoSize(videoW, videoH)
                 setVideoFrameRate(camProfile.videoFrameRate)
                 setVideoEncodingBitRate(camProfile.videoBitRate)
-                setOrientationHint(orientationHint)
+                setOrientationHint(0)
                 setOutputFile(videoFile!!.absolutePath)
                 prepare()
             }
@@ -513,9 +516,9 @@ class DeviceActivity : AppCompatActivity() {
         val overlay = try {
             TimestampBurnOverlay(
                 outputSurface = mr.surface,
-                videoWidth = camProfile.videoFrameWidth,
-                videoHeight = camProfile.videoFrameHeight,
-                orientationHint = orientationHint,
+                videoWidth = videoW,
+                videoHeight = videoH,
+                contentRotation = contentRotation,
                 timestampText = { currentTimestamp() },
             ).also { it.start() }
         } catch (e: Exception) {
