@@ -12,6 +12,8 @@ object TagSession {
     var connectedDevice: ConnectedDevice? = null
     var recordingState: RecordingState = RecordingState.IDLE
     var syncBaseUnixMs: Long = 0L
+    /** Shared CSV/log/video base name for the current session (set at Start). */
+    var sessionBaseName: String = ""
     var tagUptimeAtSync: Long? = null
     val receivedRows: MutableList<SensorCsvRow> = mutableListOf()
     val packetIds: MutableList<Long> = mutableListOf()
@@ -30,6 +32,7 @@ object TagSession {
     fun resetRecording() {
         recordingState = RecordingState.IDLE
         syncBaseUnixMs = 0L
+        sessionBaseName = ""
         tagUptimeAtSync = null
         receivedRows.clear()
         packetIds.clear()

@@ -125,7 +125,30 @@ class DeviceActivity : AppCompatActivity() {
         override fun onError(message: String) {
             runOnUiThread {
                 TagLogger.log(LogCategory.ERRORS, "BLE_ERROR", message)
-                Toast.makeText(this@DeviceActivity, message, Toast.LENGTH_SHORT).show()
+                if (isRecording && message.contains("START", ignoreCase = true)) {
+                    // Tag rejected Start after camera already rolled — stop video and reset UI
+                    try {
+                        captureSession?.stopRepeating()
+                        mediaRecorder?.stop()
+                    } catch (_: Exception) {
+                    }
+                    try {
+                        mediaRecorder?.release()
+                    } catch (_: Exception) {
+                    }
+                    mediaRecorder = null
+                    videoFile?.delete()
+                    videoFile = null
+                    isRecording = false
+                    TagSession.recordingState = RecordingState.IDLE
+                    TagSession.sessionBaseName = ""
+                    binding.recordBtnInner.setBackgroundResource(R.drawable.bg_record_btn_inner)
+                    binding.recordBtnLabel.text = getString(R.string.start)
+                    startPreview()
+                    Toast.makeText(this@DeviceActivity, message, Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(this@DeviceActivity, message, Toast.LENGTH_SHORT).show()
+                }
             }
         }
     }
@@ -304,8 +327,14 @@ class DeviceActivity : AppCompatActivity() {
             Toast.makeText(this, "Not connected", Toast.LENGTH_SHORT).show()
             return
         }
+        val camera = cameraDevice
+        val texture = binding.cameraPreview.surfaceTexture
+        if (camera == null || texture == null) {
+            Toast.makeText(this, "Camera not ready", Toast.LENGTH_SHORT).show()
+            return
+        }
 
-        // Setup BLE session
+        // Shared base name for video + CSV + log (must match History pairing)
         TagLogger.clearSessionLog()
         TagSession.receivedRows.clear()
         TagSession.packetIds.clear()
@@ -315,69 +344,124 @@ class DeviceActivity : AppCompatActivity() {
         TagSession.lastHistoryEntry = null
         TagSession.tagUptimeAtSync = null
         TagSession.syncBaseUnixMs = System.currentTimeMillis()
-        TagSession.recordingState = RecordingState.RECEIVING
-
-        TagLogger.log(
-            LogCategory.CONTROL,
-            "START",
-            "unix_ms=${TagSession.syncBaseUnixMs} device=${deviceLabel()}",
+        val deviceName = TagSession.connectedDevice?.name ?: "Tag"
+        val profilePrefix = TagSession.userProfile.safeFileName
+        TagSession.sessionBaseName = RecordingStore.makeBaseName(
+            deviceName,
+            atMs = TagSession.syncBaseUnixMs,
+            profilePrefix = profilePrefix,
         )
-        bleManager.startRecording(TagSession.syncBaseUnixMs)
 
-        // Setup video recording
-        isRecording = true
-        binding.recordBtnInner.setBackgroundResource(R.drawable.bg_record_btn_inner_active)
-        binding.recordBtnLabel.text = getString(R.string.stop)
-
-        val profile = TagSession.userProfile
-        val deviceName = TagSession.connectedDevice?.name?.replace(Regex("[^A-Za-z0-9_-]"), "_") ?: "Tag"
-        val ts = SimpleDateFormat("yyyy-MM-dd_HH-mm-ss", Locale.US).format(Date(TagSession.syncBaseUnixMs))
-        val safeProfile = profile.safeFileName
-        val baseName = if (safeProfile.isNotBlank()) "${safeProfile}_${deviceName}_${ts}" else "${deviceName}_${ts}"
         val ext = if (cameraConfig.videoFormat == CameraConfig.VideoFormat.MP4) "mp4" else "webm"
         val videoDir = File(filesDir, "videos").also { it.mkdirs() }
-        videoFile = File(videoDir, "$baseName.$ext")
+        videoFile = File(videoDir, "${TagSession.sessionBaseName}.$ext")
 
-        // Setup MediaRecorder (Video only, NO AUDIO)
-        @Suppress("DEPRECATION")
-        val mr = MediaRecorder().apply {
-            setVideoSource(MediaRecorder.VideoSource.SURFACE)
-            setOutputFormat(cameraConfig.videoFormat.outputFormat)
-            setVideoEncoder(cameraConfig.videoCodec.encoderValue)
-            setVideoSize(cameraConfig.resolution.width, cameraConfig.resolution.height)
-            setVideoFrameRate(cameraConfig.frameRate.fps)
-            setOutputFile(videoFile!!.absolutePath)
-            prepare()
+        // Prepare MediaRecorder before BLE Start so a camera failure does not leave the Tag streaming
+        val mr: MediaRecorder
+        try {
+            @Suppress("DEPRECATION")
+            mr = MediaRecorder().apply {
+                setVideoSource(MediaRecorder.VideoSource.SURFACE)
+                setOutputFormat(cameraConfig.videoFormat.outputFormat)
+                setVideoEncoder(cameraConfig.videoCodec.encoderValue)
+                setVideoSize(cameraConfig.resolution.width, cameraConfig.resolution.height)
+                setVideoFrameRate(cameraConfig.frameRate.fps)
+                setOutputFile(videoFile!!.absolutePath)
+                prepare()
+            }
+        } catch (e: Exception) {
+            TagLogger.log(LogCategory.ERRORS, "VIDEO_PREPARE_ERR", e.message ?: "")
+            videoFile?.delete()
+            videoFile = null
+            Toast.makeText(this, "Video setup failed: ${e.message}", Toast.LENGTH_LONG).show()
+            return
         }
         mediaRecorder = mr
 
-        // Restart camera session with recorder surface
-        val texture = binding.cameraPreview.surfaceTexture ?: return
         val previewSurface = Surface(texture)
         val recorderSurface = mr.surface
-
-        val request = cameraDevice!!.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
-            addTarget(previewSurface)
-            addTarget(recorderSurface)
-            set(CaptureRequest.FLASH_MODE, if (isFlashOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF)
+        val request = try {
+            camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
+                addTarget(previewSurface)
+                addTarget(recorderSurface)
+                set(
+                    CaptureRequest.FLASH_MODE,
+                    if (isFlashOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF,
+                )
+            }
+        } catch (e: Exception) {
+            abortStartAfterCameraFail("Capture request failed: ${e.message}")
+            return
         }
 
         captureSession?.close()
-        cameraDevice!!.createCaptureSession(
-            listOf(previewSurface, recorderSurface),
-            object : CameraCaptureSession.StateCallback() {
-                override fun onConfigured(session: CameraCaptureSession) {
-                    captureSession = session
-                    session.setRepeatingRequest(request.build(), null, backgroundHandler)
-                    mr.start()
-                    TagLogger.log(LogCategory.FILE, "VIDEO_RECORDING_START", videoFile!!.name)
-                }
-                override fun onConfigureFailed(session: CameraCaptureSession) {
-                    Toast.makeText(this@DeviceActivity, "Recording setup failed", Toast.LENGTH_SHORT).show()
-                }
-            },
-            backgroundHandler,
-        )
+        try {
+            camera.createCaptureSession(
+                listOf(previewSurface, recorderSurface),
+                object : CameraCaptureSession.StateCallback() {
+                    override fun onConfigured(session: CameraCaptureSession) {
+                        captureSession = session
+                        try {
+                            session.setRepeatingRequest(request.build(), null, backgroundHandler)
+                            mr.start()
+                        } catch (e: Exception) {
+                            runOnUiThread {
+                                abortStartAfterCameraFail("Video start failed: ${e.message}")
+                            }
+                            return
+                        }
+
+                        // Camera OK → start Tag stream
+                        TagSession.recordingState = RecordingState.RECEIVING
+                        TagLogger.log(
+                            LogCategory.CONTROL,
+                            "START",
+                            "unix_ms=${TagSession.syncBaseUnixMs} base=${TagSession.sessionBaseName} device=${deviceLabel()}",
+                        )
+                        bleManager.startRecording(TagSession.syncBaseUnixMs)
+                        TagLogger.log(LogCategory.FILE, "VIDEO_RECORDING_START", videoFile!!.name)
+
+                        runOnUiThread {
+                            isRecording = true
+                            binding.recordBtnInner.setBackgroundResource(R.drawable.bg_record_btn_inner_active)
+                            binding.recordBtnLabel.text = getString(R.string.stop)
+                        }
+                    }
+
+                    override fun onConfigureFailed(session: CameraCaptureSession) {
+                        runOnUiThread {
+                            abortStartAfterCameraFail("Recording setup failed")
+                        }
+                    }
+                },
+                backgroundHandler,
+            )
+        } catch (e: Exception) {
+            abortStartAfterCameraFail("Camera session failed: ${e.message}")
+        }
+    }
+
+    /** Release recorder / partial video file when Start fails before BLE is running. */
+    private fun abortStartAfterCameraFail(message: String) {
+        TagLogger.log(LogCategory.ERRORS, "VIDEO_START_ABORT", message)
+        try {
+            mediaRecorder?.reset()
+        } catch (_: Exception) {
+        }
+        try {
+            mediaRecorder?.release()
+        } catch (_: Exception) {
+        }
+        mediaRecorder = null
+        videoFile?.delete()
+        videoFile = null
+        TagSession.sessionBaseName = ""
+        TagSession.recordingState = RecordingState.IDLE
+        isRecording = false
+        binding.recordBtnInner.setBackgroundResource(R.drawable.bg_record_btn_inner)
+        binding.recordBtnLabel.text = getString(R.string.start)
+        startPreview()
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
 
     private fun stopRecording() {
@@ -430,11 +514,16 @@ class DeviceActivity : AppCompatActivity() {
         TagSession.recordingState = RecordingState.SAVING
 
         try {
-            val deviceName = TagSession.connectedDevice?.name
-                ?: TagSession.receivedRows.firstOrNull()?.deviceId
-                ?: "Tag"
-            val profilePrefix = TagSession.userProfile.safeFileName
-            val baseName = RecordingStore.makeBaseName(deviceName, profilePrefix = profilePrefix)
+            val baseName = TagSession.sessionBaseName.ifBlank {
+                val deviceName = TagSession.connectedDevice?.name
+                    ?: TagSession.receivedRows.firstOrNull()?.deviceId
+                    ?: "Tag"
+                RecordingStore.makeBaseName(
+                    deviceName,
+                    atMs = TagSession.syncBaseUnixMs.takeIf { it > 0L } ?: System.currentTimeMillis(),
+                    profilePrefix = TagSession.userProfile.safeFileName,
+                )
+            }
             val dataFile = RecordingStore.dataFile(this, baseName)
             val csvContent = com.nordic.tagmobile.protocol.CsvExporter.build(TagSession.receivedRows)
             dataFile.writeText(csvContent, Charsets.UTF_8)

@@ -122,18 +122,9 @@ class TagBleManager(context: Context) : BleManager(context) {
             listener?.onError("Not connected")
             return
         }
-        
-        // Send Date/Time command first
         writeCharacteristic(
             char,
-            Data(TagCommand.timePayload(unixMs)),
-            BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT,
-        ).enqueue()
-
-        // Then send Start command
-        writeCharacteristic(
-            char,
-            Data(TagCommand.startPayload()),
+            Data(TagCommand.startPayload(unixMs)),
             BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT,
         )
             .fail { _, status -> listener?.onError("START failed ($status)") }

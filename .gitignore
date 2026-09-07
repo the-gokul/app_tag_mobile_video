@@ -3,9 +3,12 @@ android/.gradle/
 android/build/
 android/app/build/
 android/local.properties
+android/gradle.zip
+android/gradle-8.7/
 *.apk
 *.aab
 build.log
+runs.json
 
 # IDE
 .idea/

@@ -6,18 +6,14 @@ import java.nio.ByteOrder
 object TagCommand {
     const val START: Byte = 0x01
     const val STOP: Byte = 0x02
-    const val TIME: Byte = 0x03
 
-    fun timePayload(unixMs: Long): ByteArray {
-        val dateStr = java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date(unixMs))
-        val strBytes = dateStr.toByteArray(Charsets.US_ASCII)
-        return ByteBuffer.allocate(1 + strBytes.size)
-            .put(TIME)
-            .put(strBytes)
+    /** START + int64 LE unix ms — matches app_tag / tag_control.h */
+    fun startPayload(unixMs: Long): ByteArray =
+        ByteBuffer.allocate(9)
+            .order(ByteOrder.LITTLE_ENDIAN)
+            .put(START)
+            .putLong(unixMs)
             .array()
-    }
-
-    fun startPayload(): ByteArray = byteArrayOf(START)
 
     fun stopPayload(): ByteArray = byteArrayOf(STOP)
 }
