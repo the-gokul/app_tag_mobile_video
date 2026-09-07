@@ -75,7 +75,7 @@
                 android:layout_width="48dp"
                 android:layout_height="48dp"
                 android:layout_gravity="start|top"
-                android:src="@android:drawable/ic_menu_always_invoke_with_default_browser" 
+                android:src="@drawable/ic_flash"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 app:tint="#FFFFFF"
                 android:contentDescription="Flash"/>
@@ -85,7 +85,7 @@
                 android:layout_width="48dp"
                 android:layout_height="48dp"
                 android:layout_gravity="end|top"
-                android:src="@android:drawable/ic_menu_camera" 
+                android:src="@drawable/ic_switch_camera"
                 android:background="?attr/selectableItemBackgroundBorderless"
                 app:tint="#FFFFFF"
                 android:contentDescription="Switch Camera"/>

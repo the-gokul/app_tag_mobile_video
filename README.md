@@ -148,10 +148,65 @@ cd android
 
 Open `android/` in Android Studio (JDK 17, SDK 34).
 
-### GitHub Actions
+## GitHub Actions — build & install APK
 
-See `BUILD_APK_GITHUB.md`. Workflow: `.github/workflows/build-apk.yml`  
-Artifact name in CI: `tag-mobile-video-debug-apk` (doc may still say older name).
+Repo: https://github.com/the-gokul/app_tag_mobile_video  
+Workflow file: `.github/workflows/build-apk.yml` (`Build Tag APK`)
+
+### Step-by-step (how it works)
+
+1. **Trigger** — push to `main`/`master`, or manually: **Actions → Build Tag APK → Run workflow**.
+2. **Checkout** — clones this repository on `ubuntu-latest`.
+3. **JDK 17** — Temurin Java for Android Gradle Plugin.
+4. **Android SDK** — installs `platform-tools`, `platforms;android-34`, `build-tools;34.0.0`.
+5. **Gradle 8.7** — uses committed wrapper (`android/gradlew`) when present.
+6. **Build** — `cd android && ./gradlew assembleDebug`.
+7. **On success**
+   - Upload artifact **`tag-mobile-video-debug-apk`** (`app-debug.apk`)
+   - Create a GitHub **Release** `v0.3.0-buildN` with the APK attached
+8. **On failure** — upload artifact **`build-log`** (open it to see the Gradle error).
+
+### How to download the APK
+
+1. Open **Actions** → green run (or **Releases**).
+2. **Artifacts** → download **tag-mobile-video-debug-apk** (zip expires after retention days).
+3. Unzip → install `app-debug.apk` on the phone (allow unknown sources).
+
+Commands equivalent to CI (local, if Android SDK is installed):
+
+```bash
+cd android
+./gradlew assembleDebug --no-daemon
+# APK: app/build/outputs/apk/debug/app-debug.apk
+```
+
+### Why workflow #9 failed (run after A–D push)
+
+| | |
+|--|--|
+| **Failed step** | `Build Debug APK` (`./gradlew assembleDebug`) |
+| **Not the cause** | Release step / permissions (those were skipped after build failed) |
+| **Real error** | Android resource linking failed in `activity_device.xml` |
+| **Detail** | Flash button used `@android:drawable/ic_menu_always_invoke_with_default_browser` — that drawable **does not exist** in the Android SDK |
+| **Fix** | Replaced with app drawables `ic_flash` / `ic_switch_camera`; hardened CI SDK setup like `app_tag_mobile` |
+
+Gradle excerpt from the failed `build-log` artifact:
+
+```text
+> Task :app:processDebugResources FAILED
+Android resource linking failed
+.../layout/activity_device.xml: error: resource
+android:drawable/ic_menu_always_invoke_with_default_browser not found.
+```
+
+### Troubleshooting
+
+| Symptom | What to do |
+|---------|------------|
+| Red X on Actions | Open the run → **build-log** artifact → search `FAILURE:` / `error:` |
+| Artifact missing | Build failed before upload; fix compile/resource error first |
+| Node 20 deprecation warnings | Warnings only; not the failure |
+| Need a new build | Push to `main` or **Run workflow** |
 
 ---
 
@@ -184,6 +239,8 @@ Older tree `tag/` (notify-only, no COMMAND char) will **fail** connect with this
 
 - Cloud Sync in History is a stub toast; CustomData “Save to Tag” is not a real BLE write.
 - WebM + H.264 combo may fail on some devices (prefer MP4 + H.264).
+
+**CI (fixed):** invalid flash drawable broke `processDebugResources` on GitHub Actions — see **GitHub Actions** section above.
 
 ---
 
