@@ -14,7 +14,7 @@ import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.effect.OverlayEffect
-import androidx.media3.effect.StaticOverlaySettings
+import androidx.media3.effect.OverlaySettings
 import androidx.media3.effect.TextOverlay
 import androidx.media3.transformer.Composition
 import androidx.media3.transformer.EditedMediaItem
@@ -23,6 +23,7 @@ import androidx.media3.transformer.Effects
 import androidx.media3.transformer.ExportException
 import androidx.media3.transformer.ExportResult
 import androidx.media3.transformer.Transformer
+import com.google.common.collect.ImmutableList
 import com.nordic.tagmobile.log.LogCategory
 import com.nordic.tagmobile.log.TagLogger
 import java.io.File
@@ -61,7 +62,7 @@ object VideoTimestampBurner {
         val appContext = context.applicationContext
 
         val textOverlay = object : TextOverlay() {
-            override fun getText(presentationTimeUs: Long): Spannable {
+            override fun getText(presentationTimeUs: Long): SpannableString {
                 val wallMs = syncBaseUnixMs + presentationTimeUs / 1000L
                 val label = fmt.format(Date(wallMs))
                 return SpannableString(label).apply {
@@ -77,8 +78,8 @@ object VideoTimestampBurner {
                 }
             }
 
-            override fun getOverlaySettings(presentationTimeUs: Long) =
-                StaticOverlaySettings.Builder()
+            override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings =
+                OverlaySettings.Builder()
                     .setBackgroundFrameAnchor(0f, 0.72f)
                     .setOverlayFrameAnchor(0f, 0f)
                     .setScale(0.55f, 0.55f)
@@ -86,7 +87,12 @@ object VideoTimestampBurner {
         }
 
         val edited = EditedMediaItem.Builder(MediaItem.fromUri(Uri.fromFile(videoFile)))
-            .setEffects(Effects(/* audioGenerators= */ emptyList(), /* videoEffects= */ listOf(OverlayEffect(listOf(textOverlay)))))
+            .setEffects(
+                Effects(
+                    /* audioProcessors= */ emptyList(),
+                    /* videoEffects= */ listOf(OverlayEffect(ImmutableList.of(textOverlay))),
+                ),
+            )
             .build()
 
         val composition = Composition.Builder(EditedMediaItemSequence(edited)).build()
