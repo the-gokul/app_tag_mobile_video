@@ -22,22 +22,17 @@ import java.nio.FloatBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Camera frames → OpenGL → MediaRecorder, burning a timestamp into the encoded video.
- *
- * Portrait hold → portrait file (H>W), timestamp at bottom.
- * Landscape hold → landscape file (W>H), timestamp on the right.
- * Sensor frames are rotated in UV space into the encoder buffer (orientation-hint = 0).
+ * Camera frames → OpenGL → MediaRecorder, burning a UI-matching timestamp overlay
+ * into the encoded video. Does not change MediaRecorder size/bitrate settings.
  */
 class TimestampBurnOverlay(
     private val outputSurface: Surface,
     private val videoWidth: Int,
     private val videoHeight: Int,
-    /** Degrees to rotate camera content so it is upright in the saved file (0/90/180/270). */
-    private val contentRotation: Int,
+    /** Degrees written to MediaRecorder.setOrientationHint (0/90/180/270). */
+    private val orientationHint: Int,
     private val timestampText: () -> String,
 ) : SurfaceTexture.OnFrameAvailableListener {
-
-    private val outputPortrait: Boolean get() = videoHeight > videoWidth
 
     private val running = AtomicBoolean(false)
     private var thread: HandlerThread? = null
@@ -146,11 +141,8 @@ class TimestampBurnOverlay(
     private fun initGl() {
         oesTexId = createOesTexture()
         textTexId = createTexture2D()
-        // Camera sensor frames are landscape; MVP maps them into portrait or landscape output
-        val bufW = maxOf(videoWidth, videoHeight)
-        val bufH = minOf(videoWidth, videoHeight)
         surfaceTexture = SurfaceTexture(oesTexId).also {
-            it.setDefaultBufferSize(bufW, bufH)
+            it.setDefaultBufferSize(videoWidth, videoHeight)
             it.setOnFrameAvailableListener(this, handler)
         }
         cameraInputSurface = Surface(surfaceTexture)
@@ -175,15 +167,11 @@ class TimestampBurnOverlay(
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-        // Full-screen quad; rotate sensor frames in UV space so portrait/landscape
-        // buffers get upright pixels with no stretch (swapped size ↔ 90° is 1:1).
-        val posMvp = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
-        val texM = cameraTexMatrix()
+        // Camera OES frame
         GLES20.glUseProgram(program)
         val aPos = GLES20.glGetAttribLocation(program, "aPosition")
         val aTex = GLES20.glGetAttribLocation(program, "aTexCoord")
         val uTex = GLES20.glGetUniformLocation(program, "uTexture")
-        val uMvp = GLES20.glGetUniformLocation(program, "uMVP")
         val uMat = GLES20.glGetUniformLocation(program, "uSTMatrix")
         FULL_QUAD.position(0)
         GLES20.glVertexAttribPointer(aPos, 2, GLES20.GL_FLOAT, false, 16, FULL_QUAD)
@@ -194,15 +182,14 @@ class TimestampBurnOverlay(
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId)
         GLES20.glUniform1i(uTex, 0)
-        GLES20.glUniformMatrix4fv(uMvp, 1, false, posMvp, 0)
-        GLES20.glUniformMatrix4fv(uMat, 1, false, texM, 0)
+        GLES20.glUniformMatrix4fv(uMat, 1, false, stMatrix, 0)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
-        // Portrait → bottom; landscape → right
+        // Timestamp overlay (same style as UI TextView)
         val label = timestampText()
         val bmp = renderTimestampBitmap(label)
         uploadBitmap(textTexId, bmp)
-        val textMvp = timestampMvp(bmp.width, bmp.height)
+        val (mvp, quad) = overlayQuadForHint(bmp.width, bmp.height)
         GLES20.glEnable(GLES20.GL_BLEND)
         GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
         GLES20.glUseProgram(textProgram)
@@ -210,16 +197,16 @@ class TimestampBurnOverlay(
         val tt = GLES20.glGetAttribLocation(textProgram, "aTexCoord")
         val tu = GLES20.glGetUniformLocation(textProgram, "uTexture")
         val tm = GLES20.glGetUniformLocation(textProgram, "uMVP")
-        UNIT_QUAD.position(0)
-        GLES20.glVertexAttribPointer(tp, 2, GLES20.GL_FLOAT, false, 16, UNIT_QUAD)
+        quad.position(0)
+        GLES20.glVertexAttribPointer(tp, 2, GLES20.GL_FLOAT, false, 16, quad)
         GLES20.glEnableVertexAttribArray(tp)
-        UNIT_QUAD.position(2)
-        GLES20.glVertexAttribPointer(tt, 2, GLES20.GL_FLOAT, false, 16, UNIT_QUAD)
+        quad.position(2)
+        GLES20.glVertexAttribPointer(tt, 2, GLES20.GL_FLOAT, false, 16, quad)
         GLES20.glEnableVertexAttribArray(tt)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textTexId)
         GLES20.glUniform1i(tu, 0)
-        GLES20.glUniformMatrix4fv(tm, 1, false, textMvp, 0)
+        GLES20.glUniformMatrix4fv(tm, 1, false, mvp, 0)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
         GLES20.glDisable(GLES20.GL_BLEND)
         bmp.recycle()
@@ -228,59 +215,41 @@ class TimestampBurnOverlay(
     }
 
     /**
-     * Degrees to rotate sensor (landscape) frames into the output buffer.
-     * Portrait file must always bake ~90/270 — otherwise content stays landscape inside a tall file.
+     * Place overlay where it appears at the bottom-center after the player
+     * applies [orientationHint] (same visual as the on-screen timestamp).
      */
-    private fun bakeDegrees(): Int {
-        val hint = ((contentRotation % 360) + 360) % 360
-        return if (outputPortrait) {
-            when (hint) {
-                0, 180 -> 90
-                else -> hint
-            }
-        } else {
-            when (hint) {
-                90, 270 -> 0
-                else -> hint
-            }
-        }
-    }
-
-    /**
-     * SurfaceTexture matrix + rotate about UV center.
-     * For portrait output (H>W) with landscape sensor buffer, 90° UV rotate maps 1:1
-     * onto the swapped encoder size — upright, no shrink.
-     */
-    private fun cameraTexMatrix(): FloatArray {
-        val rot = bakeDegrees()
-        val rotM = FloatArray(16)
-        Matrix.setIdentityM(rotM, 0)
-        if (rot != 0) {
-            Matrix.translateM(rotM, 0, 0.5f, 0.5f, 0f)
-            // Clockwise bake (matches Camera/MediaRecorder orientation degrees)
-            Matrix.rotateM(rotM, 0, -rot.toFloat(), 0f, 0f, 1f)
-            Matrix.translateM(rotM, 0, -0.5f, -0.5f, 0f)
-        }
-        val out = FloatArray(16)
-        // Apply camera ST first, then rotate the sampled image
-        Matrix.multiplyMM(out, 0, rotM, 0, stMatrix, 0)
-        return out
-    }
-
-    /** Portrait → bottom-center; landscape → right-center. */
-    private fun timestampMvp(bw: Int, bh: Int): FloatArray {
+    private fun overlayQuadForHint(bw: Int, bh: Int): Pair<FloatArray, FloatBuffer> {
         val mvp = FloatArray(16)
         Matrix.setIdentityM(mvp, 0)
-        val scaleX = (bw.toFloat() / videoWidth.coerceAtLeast(1)) * 2f
-        val scaleY = (bh.toFloat() / videoHeight.coerceAtLeast(1)) * 2f
-        val margin = 0.20f
-        if (outputPortrait) {
-            Matrix.translateM(mvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
-        } else {
-            Matrix.translateM(mvp, 0, 1f - margin - scaleX / 2f, 0f, 0f)
+        // Normalize overlay size relative to video buffer
+        val scaleX = (bw.toFloat() / videoWidth) * 2f
+        val scaleY = (bh.toFloat() / videoHeight) * 2f
+        // NDC: bottom margin similar to UI (~12% from bottom)
+        val margin = 0.18f
+
+        when (orientationHint) {
+            90 -> {
+                // After 90° CW display rotation, buffer left edge becomes bottom
+                Matrix.translateM(mvp, 0, -1f + margin + scaleY / 2f, 0f, 0f)
+                Matrix.rotateM(mvp, 0, 90f, 0f, 0f, 1f)
+                Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+            }
+            270 -> {
+                Matrix.translateM(mvp, 0, 1f - margin - scaleY / 2f, 0f, 0f)
+                Matrix.rotateM(mvp, 0, -90f, 0f, 0f, 1f)
+                Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+            }
+            180 -> {
+                Matrix.translateM(mvp, 0, 0f, 1f - margin - scaleY / 2f, 0f)
+                Matrix.rotateM(mvp, 0, 180f, 0f, 0f, 1f)
+                Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+            }
+            else -> {
+                Matrix.translateM(mvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
+                Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+            }
         }
-        Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
-        return mvp
+        return mvp to UNIT_QUAD
     }
 
     private fun renderTimestampBitmap(text: String): Bitmap {
@@ -429,11 +398,10 @@ class TimestampBurnOverlay(
         private const val VERTEX_OES = """
             attribute vec4 aPosition;
             attribute vec2 aTexCoord;
-            uniform mat4 uMVP;
             uniform mat4 uSTMatrix;
             varying vec2 vTexCoord;
             void main() {
-              gl_Position = uMVP * aPosition;
+              gl_Position = aPosition;
               vTexCoord = (uSTMatrix * vec4(aTexCoord, 0.0, 1.0)).xy;
             }
         """

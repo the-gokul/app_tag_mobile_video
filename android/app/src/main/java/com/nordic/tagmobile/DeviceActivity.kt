@@ -35,13 +35,15 @@ import com.nordic.tagmobile.model.RecordingState
 import com.nordic.tagmobile.protocol.SensorPacketParser
 import com.nordic.tagmobile.protocol.SensorPacketParser.HEADER_SIZE
 import com.nordic.tagmobile.protocol.XlsxExporter
-import com.nordic.tagmobile.camera.TimestampBurnOverlay
-import com.nordic.tagmobile.storage.GalleryPublisher
+import androidx.media3.common.util.UnstableApi
 import com.nordic.tagmobile.storage.RecordingStore
+import com.nordic.tagmobile.video.VideoTimestampBurner
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
+import kotlin.concurrent.thread
 
+@OptIn(UnstableApi::class)
 class DeviceActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityDeviceBinding
@@ -55,7 +57,6 @@ class DeviceActivity : AppCompatActivity() {
     private var backgroundHandler: Handler? = null
     private var videoFile: File? = null
     private var lastVideoFile: File? = null
-    private var timestampOverlay: TimestampBurnOverlay? = null
     private var isRecording = false
     private var isFlashOn = false
     private var isFrontCamera = false
@@ -143,14 +144,6 @@ class DeviceActivity : AppCompatActivity() {
                     // Tag rejected Start after camera already rolled — stop video and reset UI
                     try {
                         captureSession?.stopRepeating()
-                    } catch (_: Exception) {
-                    }
-                    try {
-                        timestampOverlay?.release()
-                    } catch (_: Exception) {
-                    }
-                    timestampOverlay = null
-                    try {
                         mediaRecorder?.stop()
                     } catch (_: Exception) {
                     }
@@ -303,7 +296,7 @@ class DeviceActivity : AppCompatActivity() {
         binding.cameraPreview.setTransform(matrix)
     }
 
-    /** Degrees to bake so content is upright in the saved portrait/landscape file. */
+    /** Write rotation metadata so portrait clips play as portrait (and landscape as landscape). */
     private fun videoOrientationHint(): Int {
         val cameraId = activeCameraId ?: return if (isPortraitDisplay()) 90 else 0
         return try {
@@ -357,11 +350,6 @@ class DeviceActivity : AppCompatActivity() {
     }
 
     private fun closeCamera() {
-        try {
-            timestampOverlay?.release()
-        } catch (_: Exception) {
-        }
-        timestampOverlay = null
         captureSession?.close(); captureSession = null
         cameraDevice?.close(); cameraDevice = null
         mediaRecorder?.release(); mediaRecorder = null
@@ -484,14 +472,7 @@ class DeviceActivity : AppCompatActivity() {
             CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH)
         }
 
-        // Portrait hold → portrait file (H>W); landscape hold → landscape file (W>H).
-        // Bake rotation into pixels; keep orientation-hint at 0 so burned timestamp stays correct.
-        val longSide = maxOf(camProfile.videoFrameWidth, camProfile.videoFrameHeight)
-        val shortSide = minOf(camProfile.videoFrameWidth, camProfile.videoFrameHeight)
-        val portrait = isPortraitDisplay()
-        val videoW = if (portrait) shortSide else longSide
-        val videoH = if (portrait) longSide else shortSide
-        val contentRotation = videoOrientationHint()
+        // Prepare MediaRecorder before BLE Start so a camera failure does not leave the Tag streaming
         val mr: MediaRecorder
         try {
             @Suppress("DEPRECATION")
@@ -499,10 +480,10 @@ class DeviceActivity : AppCompatActivity() {
                 setVideoSource(MediaRecorder.VideoSource.SURFACE)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-                setVideoSize(videoW, videoH)
+                setVideoSize(camProfile.videoFrameWidth, camProfile.videoFrameHeight)
                 setVideoFrameRate(camProfile.videoFrameRate)
                 setVideoEncodingBitRate(camProfile.videoBitRate)
-                setOrientationHint(0)
+                setOrientationHint(videoOrientationHint())
                 setOutputFile(videoFile!!.absolutePath)
                 prepare()
             }
@@ -515,40 +496,12 @@ class DeviceActivity : AppCompatActivity() {
         }
         mediaRecorder = mr
 
-        // Burn UI-matching timestamp into the encoded video (preview TextView unchanged)
-        val overlay = try {
-            TimestampBurnOverlay(
-                outputSurface = mr.surface,
-                videoWidth = videoW,
-                videoHeight = videoH,
-                contentRotation = contentRotation,
-                timestampText = { currentTimestamp() },
-            ).also { it.start() }
-        } catch (e: Exception) {
-            TagLogger.log(LogCategory.ERRORS, "TIMESTAMP_OVERLAY_ERR", e.message ?: "")
-            try {
-                mr.reset()
-                mr.release()
-            } catch (_: Exception) {
-            }
-            mediaRecorder = null
-            videoFile?.delete()
-            videoFile = null
-            Toast.makeText(this, "Video overlay setup failed: ${e.message}", Toast.LENGTH_LONG).show()
-            return
-        }
-        timestampOverlay = overlay
-        val recorderInput = overlay.cameraInputSurface
-        if (recorderInput == null) {
-            abortStartAfterCameraFail("Overlay surface missing")
-            return
-        }
-
         val previewSurface = Surface(texture)
+        val recorderSurface = mr.surface
         val request = try {
             camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(previewSurface)
-                addTarget(recorderInput)
+                addTarget(recorderSurface)
                 set(
                     CaptureRequest.FLASH_MODE,
                     if (isFlashOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF,
@@ -562,7 +515,7 @@ class DeviceActivity : AppCompatActivity() {
         captureSession?.close()
         try {
             camera.createCaptureSession(
-                listOf(previewSurface, recorderInput),
+                listOf(previewSurface, recorderSurface),
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
                         captureSession = session
@@ -609,11 +562,6 @@ class DeviceActivity : AppCompatActivity() {
     private fun abortStartAfterCameraFail(message: String) {
         TagLogger.log(LogCategory.ERRORS, "VIDEO_START_ABORT", message)
         try {
-            timestampOverlay?.release()
-        } catch (_: Exception) {
-        }
-        timestampOverlay = null
-        try {
             mediaRecorder?.reset()
         } catch (_: Exception) {
         }
@@ -641,18 +589,9 @@ class DeviceActivity : AppCompatActivity() {
         bleManager.stopRecording()
         TagLogger.log(LogCategory.CONTROL, "STOP", deviceLabel())
 
-        // Stop camera request first, then overlay, then MediaRecorder
+        // Stop video
         try {
             captureSession?.stopRepeating()
-        } catch (_: Exception) {
-        }
-        try {
-            timestampOverlay?.release()
-        } catch (e: Exception) {
-            TagLogger.log(LogCategory.ERRORS, "OVERLAY_STOP_ERR", e.message ?: "")
-        }
-        timestampOverlay = null
-        try {
             mediaRecorder?.stop()
         } catch (e: Exception) {
             TagLogger.log(LogCategory.ERRORS, "VIDEO_STOP_ERR", e.message ?: "")
@@ -664,14 +603,28 @@ class DeviceActivity : AppCompatActivity() {
         startPreview()
 
         val vFile = videoFile
-        val vSize = vFile?.length()?.let { formatBytes(it) } ?: "?"
-        // Publish a copy into Movies/Tag so Gallery / Photos can see it
+        val syncMs = TagSession.syncBaseUnixMs
+
+        // Burn on-screen style timestamp into the saved MP4 (background)
         if (vFile != null && vFile.exists() && vFile.length() > 0L) {
-            val galleryUri = GalleryPublisher.publishVideo(this, vFile)
-            if (galleryUri != null) {
-                TagLogger.log(LogCategory.FILE, "GALLERY_URI", galleryUri.toString())
+            Toast.makeText(this, R.string.adding_timestamp, Toast.LENGTH_SHORT).show()
+            thread(name = "ts-burn") {
+                val burned = try {
+                    VideoTimestampBurner.burnInPlace(this, vFile, syncMs)
+                } catch (e: Exception) {
+                    TagLogger.log(LogCategory.ERRORS, "TIMESTAMP_BURN_FAIL", e.message ?: "")
+                    false
+                }
+                runOnUiThread {
+                    if (burned) {
+                        Toast.makeText(this, R.string.timestamp_added, Toast.LENGTH_SHORT).show()
+                    }
+                    refreshLastVideoThumb()
+                }
             }
         }
+
+        val vSize = vFile?.length()?.let { formatBytes(it) } ?: "?"
 
         // Save data files (CSV/Log)
         val report = SessionAnalyzer.analyze(
@@ -745,7 +698,7 @@ class DeviceActivity : AppCompatActivity() {
             TagSession.lastHistoryEntry = entry
             TagSession.lastFeedbackText = report.feedbackText
             TagSession.recordingState = RecordingState.RECEIVED
-            Toast.makeText(this, "Saved ${entry.baseName}\nVideo: $vSize (also in Gallery)", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Saved ${entry.baseName}\nVideo: $vSize", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             TagLogger.log(LogCategory.ERRORS, "AUTO_SAVE_FAIL", e.message ?: "")
             TagSession.recordingState = RecordingState.RECEIVED

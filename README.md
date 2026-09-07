@@ -14,7 +14,7 @@ This is the **video fork** of `app_tag_mobile`. Sensor CSV / History / logs are 
 ## What it does
 
 1. Gate on dog/user **Profile** (first launch).
-2. **Scan** Tag devices only (`Tag` / `Tag_*` or `TAG_STREAM` UUID).
+2. **Scan** nearby BLE devices; highlight likely Tags.
 3. **Connect** only if GATT service `TAG_STREAM` is present.
 4. On **Start**: sync time with the Tag, start sensor notify stream, start phone video.
 5. On **Stop**: stop Tag stream + video, analyze packet gaps, auto-save CSV + session log (+ expect matching video) into **History**.
@@ -67,10 +67,11 @@ MainActivity
 
 ### BLE scan (`TagBleScanner`)
 
-- Scans nearby LE (legacy 1M), but **lists only Tag candidates**:
+- Scans **all** nearby LE devices (no UUID filter at scan time).
+- Uses legacy 1M-friendly settings (`setLegacy(true)`).
+- Marks a device as a Tag hint if:
   - advertisement includes `TAG_STREAM` UUID, or
   - name is `Tag` / `Tag_*`.
-- Other BLE (phones, IoT, unknown) are ignored.
 
 ### BLE connect (`TagBleManager`)
 
