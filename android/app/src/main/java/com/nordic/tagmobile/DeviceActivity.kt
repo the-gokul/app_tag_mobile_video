@@ -26,6 +26,7 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.media3.common.util.UnstableApi
 import com.nordic.tagmobile.analysis.SessionAnalyzer
 import com.nordic.tagmobile.ble.TagBleManager
 import com.nordic.tagmobile.databinding.ActivityDeviceBinding
@@ -35,13 +36,12 @@ import com.nordic.tagmobile.model.RecordingState
 import com.nordic.tagmobile.protocol.SensorPacketParser
 import com.nordic.tagmobile.protocol.SensorPacketParser.HEADER_SIZE
 import com.nordic.tagmobile.protocol.XlsxExporter
-import androidx.media3.common.util.UnstableApi
+import com.nordic.tagmobile.storage.GalleryPublisher
 import com.nordic.tagmobile.storage.RecordingStore
 import com.nordic.tagmobile.video.VideoTimestampBurner
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
-import kotlin.concurrent.thread
 
 @OptIn(UnstableApi::class)
 class DeviceActivity : AppCompatActivity() {
@@ -603,27 +603,6 @@ class DeviceActivity : AppCompatActivity() {
         startPreview()
 
         val vFile = videoFile
-        val syncMs = TagSession.syncBaseUnixMs
-
-        // Burn on-screen style timestamp into the saved MP4 (background)
-        if (vFile != null && vFile.exists() && vFile.length() > 0L) {
-            Toast.makeText(this, R.string.adding_timestamp, Toast.LENGTH_SHORT).show()
-            thread(name = "ts-burn") {
-                val burned = try {
-                    VideoTimestampBurner.burnInPlace(this, vFile, syncMs)
-                } catch (e: Exception) {
-                    TagLogger.log(LogCategory.ERRORS, "TIMESTAMP_BURN_FAIL", e.message ?: "")
-                    false
-                }
-                runOnUiThread {
-                    if (burned) {
-                        Toast.makeText(this, R.string.timestamp_added, Toast.LENGTH_SHORT).show()
-                    }
-                    refreshLastVideoThumb()
-                }
-            }
-        }
-
         val vSize = vFile?.length()?.let { formatBytes(it) } ?: "?"
 
         // Save data files (CSV/Log)
@@ -649,6 +628,9 @@ class DeviceActivity : AppCompatActivity() {
         TagSession.lastFeedbackText = report.feedbackText
         TagSession.recordingState = RecordingState.SAVING
 
+        val syncBase = TagSession.syncBaseUnixMs
+        val recordedVideo = vFile
+
         try {
             val baseName = TagSession.sessionBaseName.ifBlank {
                 val deviceName = TagSession.connectedDevice?.name
@@ -656,7 +638,7 @@ class DeviceActivity : AppCompatActivity() {
                     ?: "Tag"
                 RecordingStore.makeBaseName(
                     deviceName,
-                    atMs = TagSession.syncBaseUnixMs.takeIf { it > 0L } ?: System.currentTimeMillis(),
+                    atMs = syncBase.takeIf { it > 0L } ?: System.currentTimeMillis(),
                     profilePrefix = TagSession.userProfile.safeFileName,
                 )
             }
@@ -675,7 +657,7 @@ class DeviceActivity : AppCompatActivity() {
                     status = report.statusShort,
                 ),
             )
-            
+
             val logBody = buildString {
                 appendLine("Tag session log")
                 appendLine("base_name=$baseName")
@@ -699,6 +681,46 @@ class DeviceActivity : AppCompatActivity() {
             TagSession.lastFeedbackText = report.feedbackText
             TagSession.recordingState = RecordingState.RECEIVED
             Toast.makeText(this, "Saved ${entry.baseName}\nVideo: $vSize", Toast.LENGTH_LONG).show()
+
+            // #1 burn timestamp into MP4, then publish burned file to Gallery
+            if (recordedVideo != null && recordedVideo.exists()) {
+                Toast.makeText(this, R.string.burning_timestamp, Toast.LENGTH_SHORT).show()
+                Thread {
+                    val burnBase = syncBase.takeIf { it > 0L } ?: System.currentTimeMillis()
+                    val burned = try {
+                        VideoTimestampBurner.burnInPlace(
+                            context = applicationContext,
+                            videoFile = recordedVideo,
+                            syncBaseUnixMs = burnBase,
+                        )
+                    } catch (e: Exception) {
+                        TagLogger.log(LogCategory.ERRORS, "TIMESTAMP_BURN_FAIL", e.message ?: "")
+                        false
+                    }
+                    val galleryUri = GalleryPublisher.publishVideo(
+                        applicationContext,
+                        recordedVideo,
+                    )
+                    if (galleryUri != null) {
+                        RecordingStore.updateGalleryUri(
+                            applicationContext,
+                            baseName,
+                            galleryUri.toString(),
+                        )
+                        TagSession.lastHistoryEntry =
+                            TagSession.lastHistoryEntry?.copy(galleryUri = galleryUri.toString())
+                    }
+                    runOnUiThread {
+                        refreshLastVideoThumb()
+                        val msg = if (burned) {
+                            getString(R.string.timestamp_burn_ok)
+                        } else {
+                            getString(R.string.timestamp_burn_skip)
+                        }
+                        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
+                    }
+                }.start()
+            }
         } catch (e: Exception) {
             TagLogger.log(LogCategory.ERRORS, "AUTO_SAVE_FAIL", e.message ?: "")
             TagSession.recordingState = RecordingState.RECEIVED

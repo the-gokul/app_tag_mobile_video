@@ -9,6 +9,9 @@
     <string name="connected">Connected</string>
     <string name="disconnect">Disconnect</string>
     <string name="last_video">Last video</string>
+    <string name="burning_timestamp">Adding timestamp to video…</string>
+    <string name="timestamp_burn_ok">Video saved with timestamp</string>
+    <string name="timestamp_burn_skip">Video saved (timestamp overlay skipped)</string>
     <string name="open_last_video_failed">Could not open video</string>
     <string name="no_last_video">No previous video yet</string>
     <string name="start">Start</string>
@@ -22,7 +25,9 @@
     <string name="grant_permissions">Grant</string>
     <string name="bluetooth_required">Turn on Bluetooth to scan.</string>
     <string name="location_required">Turn on Location (required for BLE scan on Android 11).</string>
-    <string name="scanning_for_tags">Scanning for nearby Tag devices…\n\nTags will appear in the list. Connect only works for Tag GATT.</string>
+    <string name="scanning_for_tags">Scanning for Tag, phone, and laptop BLE…\n\nIoT gadgets are hidden. Tags always appear when advertising.</string>
+    <string name="history_empty">No recordings yet.\nComplete Start → Stop to auto-save data and log.</string>
+    <string name="deleted_permanently">Deleted permanently from app and Gallery</string>
     <string name="devices_found">%d devices</string>
     <string name="menu">Menu</string>
     <string name="settings">Settings</string>
@@ -35,7 +40,6 @@
     <string name="log_level_ble_control">BLE + control</string>
     <string name="log_level_verbose">Verbose (every packet)</string>
     <string name="settings_hint">Logs are stored on this phone only (csv/ and logs/ folders). No cloud upload.</string>
-    <string name="history_empty">No recordings yet.\nComplete Start → Stop to auto-save data and log.</string>
     <string name="share">Share</string>
     <string name="share_csv">CSV</string>
     <string name="share_log">Log</string>
@@ -52,10 +56,7 @@
     <string name="select_to_delete">Select files to delete</string>
     <string name="selected_count">%d selected</string>
     <string name="delete_permanently_title">Delete permanently?</string>
-    <string name="delete_permanently_message">Permanently erase %d recording(s) from this device (app files and gallery copies)?</string>
-    <string name="deleted_permanently">Deleted permanently from device</string>
-    <string name="adding_timestamp">Adding timestamp to video…</string>
-    <string name="timestamp_added">Timestamp saved in video</string>
+    <string name="delete_permanently_message">Delete %d recording(s) permanently from the app and Gallery?</string>
     <string name="disconnected">Disconnected</string>
     <string name="open_camera">Open Camera</string>
     <string name="camera_settings">Camera Settings</string>

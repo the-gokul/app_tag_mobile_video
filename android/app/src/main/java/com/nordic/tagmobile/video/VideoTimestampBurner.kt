@@ -4,7 +4,8 @@ import android.content.Context
 import android.graphics.Color
 import android.graphics.Typeface
 import android.net.Uri
-import android.text.Spannable
+import android.os.Handler
+import android.os.Looper
 import android.text.SpannableString
 import android.text.style.AbsoluteSizeSpan
 import android.text.style.BackgroundColorSpan
@@ -33,6 +34,7 @@ import java.util.Locale
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Burns a wall-clock timestamp watermark into an MP4 (same style as the camera overlay).
@@ -54,26 +56,29 @@ object VideoTimestampBurner {
         timeoutSec: Long = 180L,
     ): Boolean {
         if (!videoFile.exists() || videoFile.length() < 100L) return false
+        val baseMs = if (syncBaseUnixMs > 0L) syncBaseUnixMs else System.currentTimeMillis()
         val outFile = File(videoFile.parentFile, "${videoFile.nameWithoutExtension}_burn.mp4")
         if (outFile.exists()) outFile.delete()
 
         val ok = AtomicBoolean(false)
         val done = CountDownLatch(1)
         val appContext = context.applicationContext
+        val transformerRef = AtomicReference<Transformer?>(null)
+        val main = Handler(Looper.getMainLooper())
 
         val textOverlay = object : TextOverlay() {
             override fun getText(presentationTimeUs: Long): SpannableString {
-                val wallMs = syncBaseUnixMs + presentationTimeUs / 1000L
+                val wallMs = baseMs + presentationTimeUs / 1000L
                 val label = fmt.format(Date(wallMs))
                 return SpannableString(label).apply {
-                    setSpan(ForegroundColorSpan(Color.WHITE), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    setSpan(AbsoluteSizeSpan(22, true), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    setSpan(StyleSpan(Typeface.BOLD), 0, length, Spannable.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    setSpan(ForegroundColorSpan(Color.WHITE), 0, length, SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    setSpan(AbsoluteSizeSpan(22, true), 0, length, SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE)
+                    setSpan(StyleSpan(Typeface.BOLD), 0, length, SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE)
                     setSpan(
                         BackgroundColorSpan(0x8C000000.toInt()),
                         0,
                         length,
-                        Spannable.SPAN_EXCLUSIVE_EXCLUSIVE,
+                        SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE,
                     )
                 }
             }
@@ -97,36 +102,48 @@ object VideoTimestampBurner {
 
         val composition = Composition.Builder(EditedMediaItemSequence(edited)).build()
 
-        val transformer = Transformer.Builder(appContext)
-            .setVideoMimeType(MimeTypes.VIDEO_H264)
-            .addListener(
-                object : Transformer.Listener {
-                    override fun onCompleted(composition: Composition, exportResult: ExportResult) {
-                        ok.set(true)
-                        done.countDown()
-                    }
-
-                    override fun onError(
-                        composition: Composition,
-                        exportResult: ExportResult,
-                        exportException: ExportException,
-                    ) {
-                        TagLogger.log(
-                            LogCategory.ERRORS,
-                            "TIMESTAMP_BURN_FAIL",
-                            exportException.message ?: "transform error",
-                        )
-                        done.countDown()
-                    }
-                },
-            )
-            .build()
-
         return try {
-            transformer.start(composition, outFile.absolutePath)
+            // Media3 Transformer must be created/started on a Looper thread
+            main.post {
+                try {
+                    val transformer = Transformer.Builder(appContext)
+                        .setVideoMimeType(MimeTypes.VIDEO_H264)
+                        .addListener(
+                            object : Transformer.Listener {
+                                override fun onCompleted(
+                                    composition: Composition,
+                                    exportResult: ExportResult,
+                                ) {
+                                    ok.set(true)
+                                    done.countDown()
+                                }
+
+                                override fun onError(
+                                    composition: Composition,
+                                    exportResult: ExportResult,
+                                    exportException: ExportException,
+                                ) {
+                                    TagLogger.log(
+                                        LogCategory.ERRORS,
+                                        "TIMESTAMP_BURN_FAIL",
+                                        exportException.message ?: "transform error",
+                                    )
+                                    done.countDown()
+                                }
+                            },
+                        )
+                        .build()
+                    transformerRef.set(transformer)
+                    transformer.start(composition, outFile.absolutePath)
+                } catch (e: Exception) {
+                    TagLogger.log(LogCategory.ERRORS, "TIMESTAMP_BURN_FAIL", e.message ?: "")
+                    done.countDown()
+                }
+            }
+
             val finished = done.await(timeoutSec, TimeUnit.SECONDS)
             if (!finished) {
-                transformer.cancel()
+                main.post { transformerRef.get()?.cancel() }
                 TagLogger.log(LogCategory.ERRORS, "TIMESTAMP_BURN_TIMEOUT", videoFile.name)
                 outFile.delete()
                 return false

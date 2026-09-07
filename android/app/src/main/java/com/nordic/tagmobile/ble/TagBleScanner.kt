@@ -11,11 +11,13 @@ import no.nordicsemi.android.support.v18.scanner.ScanCallback
 import no.nordicsemi.android.support.v18.scanner.ScanRecord
 import no.nordicsemi.android.support.v18.scanner.ScanResult
 import no.nordicsemi.android.support.v18.scanner.ScanSettings
+import java.util.Locale
 import java.util.UUID
 
 /**
- * Scans nearby BLE like nRF Connect default scanner (legacy 1M, no UUID filter).
- * Tag devices are recognized by GAP name Tag_* and/or TAG_STREAM UUID in the advert.
+ * Scans nearby BLE and reports only Tag devices plus phone/laptop-like names.
+ * Random IoT gadgets are filtered out. Tags always remain visible
+ * (TAG_STREAM UUID and/or name Tag / Tag_*).
  */
 class TagBleScanner(context: Context) {
 
@@ -35,6 +37,8 @@ class TagBleScanner(context: Context) {
             val record = result.scanRecord
             val name = resolveName(device, record, hasTagServiceUuid(record))
             val isTag = hasTagServiceUuid(record) || looksLikeTagName(name)
+            // Keep Tags; also allow phone/laptop BLE; drop other IoT noise
+            if (!isTag && !looksLikePhoneOrLaptop(name)) return
             listener?.onDevice(device, result.rssi, name, isTag)
         }
 
@@ -106,6 +110,21 @@ class TagBleScanner(context: Context) {
     private fun looksLikeTagName(name: String): Boolean =
         name.equals("Tag", ignoreCase = true) ||
             name.startsWith("Tag_", ignoreCase = true)
+
+    /** Phones / laptops by common advertised names (IoT gadgets excluded). */
+    private fun looksLikePhoneOrLaptop(name: String): Boolean {
+        if (name.isBlank() || name.equals("Unknown", ignoreCase = true)) return false
+        val n = name.lowercase(Locale.US)
+        val keys = listOf(
+            "iphone", "ipad", "galaxy", "pixel", "xiaomi", "redmi", "poco",
+            "oneplus", "oppo", "vivo", "realme", "huawei", "honor", "motorola",
+            "nokia", "sony", "xperia", "asus", "zenfone", "nothing", "fairphone",
+            "macbook", "imac", "mac mini", "laptop", "notebook", "desktop",
+            "thinkpad", "ideapad", "surface", "windows", "pc-", "dell ", "hp ",
+            "lenovo", "samsung",
+        )
+        return keys.any { n.contains(it) }
+    }
 
     @SuppressLint("MissingPermission")
     private fun bondedName(address: String): String? {

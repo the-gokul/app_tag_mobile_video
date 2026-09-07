@@ -1,5 +1,6 @@
 package com.nordic.tagmobile.storage
 
+import android.content.ContentUris
 import android.content.ContentValues
 import android.content.Context
 import android.net.Uri
@@ -11,13 +12,15 @@ import com.nordic.tagmobile.log.TagLogger
 import java.io.File
 
 /**
- * Copies an app-private recording into the public Movies/Tag folder so
- * system Gallery / Photos apps can see it. Keeps the original file for History.
+ * Publishes app recordings to public Movies/Tag (system Gallery) and
+ * permanently removes those MediaStore rows on History delete.
  */
 object GalleryPublisher {
 
     fun publishVideo(context: Context, videoFile: File): Uri? {
         if (!videoFile.exists() || videoFile.length() <= 0L) return null
+        // Replace any prior gallery copy with the same name (e.g. re-burn)
+        deleteByDisplayName(context, videoFile.name)
         return try {
             val resolver = context.contentResolver
             val name = videoFile.name
@@ -53,6 +56,57 @@ object GalleryPublisher {
         } catch (e: Exception) {
             TagLogger.log(LogCategory.ERRORS, "GALLERY_PUBLISH_FAIL", e.message ?: "")
             null
+        }
+    }
+
+    /** Complete erase from Gallery / MediaStore (by saved URI and/or file name). */
+    fun deletePublished(context: Context, displayName: String?, galleryUri: String?) {
+        if (!galleryUri.isNullOrBlank()) {
+            try {
+                context.contentResolver.delete(Uri.parse(galleryUri), null, null)
+            } catch (e: Exception) {
+                TagLogger.log(LogCategory.ERRORS, "GALLERY_DELETE_URI_FAIL", e.message ?: "")
+            }
+        }
+        if (!displayName.isNullOrBlank()) {
+            deleteByDisplayName(context, displayName)
+        }
+    }
+
+    fun deleteByDisplayName(context: Context, displayName: String) {
+        try {
+            val resolver = context.contentResolver
+            val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                // EXTERNAL covers all volumes (more reliable than PRIMARY alone)
+                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
+            } else {
+                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
+            }
+            var deleted = 0
+            resolver.query(
+                collection,
+                arrayOf(MediaStore.Video.Media._ID),
+                "${MediaStore.Video.Media.DISPLAY_NAME}=?",
+                arrayOf(displayName),
+                null,
+            )?.use { cursor ->
+                val idCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
+                while (cursor.moveToNext()) {
+                    val id = cursor.getLong(idCol)
+                    val uri = ContentUris.withAppendedId(collection, id)
+                    deleted += resolver.delete(uri, null, null)
+                }
+            }
+            // Also wipe leftover public files some OEMs keep indexed
+            try {
+                val movies = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES)
+                File(File(movies, "Tag"), displayName).delete()
+                File(movies, displayName).delete()
+            } catch (_: Exception) {
+            }
+            TagLogger.log(LogCategory.FILE, "GALLERY_DELETE_OK", "$displayName count=$deleted")
+        } catch (e: Exception) {
+            TagLogger.log(LogCategory.ERRORS, "GALLERY_DELETE_FAIL", e.message ?: "")
         }
     }
 }

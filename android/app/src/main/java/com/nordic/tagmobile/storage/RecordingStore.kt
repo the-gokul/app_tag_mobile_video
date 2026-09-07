@@ -1,10 +1,6 @@
 package com.nordic.tagmobile.storage
 
-import android.content.ContentUris
 import android.content.Context
-import android.os.Build
-import android.os.Environment
-import android.provider.MediaStore
 import com.nordic.tagmobile.log.LogCategory
 import com.nordic.tagmobile.log.TagLogger
 import org.json.JSONObject
@@ -22,6 +18,7 @@ data class HistoryEntry(
     val sampleCount: Int,
     val status: String,
     val savedAtMs: Long,
+    val galleryUri: String? = null,
 )
 
 object RecordingStore {
@@ -82,6 +79,7 @@ object RecordingStore {
         packetCount: Int,
         sampleCount: Int,
         status: String,
+        galleryUri: String? = null,
     ): HistoryEntry {
         val dataF = findDataFile(context, baseName) ?: dataFile(context, baseName)
         val logF = logFile(context, baseName)
@@ -95,6 +93,7 @@ object RecordingStore {
                 .put("sampleCount", sampleCount)
                 .put("status", status)
                 .put("savedAtMs", savedAt)
+                .put("galleryUri", galleryUri ?: JSONObject.NULL)
                 .toString(),
             Charsets.UTF_8,
         )
@@ -112,7 +111,19 @@ object RecordingStore {
             sampleCount = sampleCount,
             status = status,
             savedAtMs = savedAt,
+            galleryUri = galleryUri,
         )
+    }
+
+    fun updateGalleryUri(context: Context, baseName: String, galleryUri: String?) {
+        val meta = metaFile(context, baseName)
+        if (!meta.exists()) return
+        try {
+            val o = JSONObject(meta.readText(Charsets.UTF_8))
+            o.put("galleryUri", galleryUri ?: JSONObject.NULL)
+            meta.writeText(o.toString(), Charsets.UTF_8)
+        } catch (_: Exception) {
+        }
     }
 
     fun listHistory(context: Context): List<HistoryEntry> {
@@ -133,9 +144,12 @@ object RecordingStore {
             val dataF = findDataFile(context, base) ?: return@mapNotNull null
             val logF = File(logsRoot, "$base.log")
             val meta = metaFile(context, base)
+            val vidF = findVideoFile(context, base)
+            var galleryUri: String? = null
             val (packets, samples, status, savedAt) = if (meta.exists()) {
                 try {
                     val o = JSONObject(meta.readText(Charsets.UTF_8))
+                    galleryUri = o.optString("galleryUri").takeIf { it.isNotBlank() && it != "null" }
                     Meta(
                         o.optInt("packetCount", 0),
                         o.optInt("sampleCount", 0),
@@ -152,11 +166,12 @@ object RecordingStore {
                 baseName = base,
                 dataFile = dataF,
                 logFile = logF,
-                videoFile = findVideoFile(context, base),
+                videoFile = vidF,
                 packetCount = packets,
                 sampleCount = samples,
                 status = status,
                 savedAtMs = savedAt,
+                galleryUri = galleryUri,
             )
         }.sortedByDescending { it.savedAtMs }
     }
@@ -168,16 +183,20 @@ object RecordingStore {
         val savedAt: Long,
     )
 
-    /**
-     * Permanently erase session from the device:
-     * app-private data/log/video/meta + any MediaStore/gallery copies + common public folders.
-     */
     fun deleteEntry(context: Context, entry: HistoryEntry) {
-        val names = linkedSetOf<String>()
-        entry.videoFile?.name?.let { names.add(it) }
-        names.add("${entry.baseName}.mp4")
-        names.add("${entry.baseName}.webm")
-        names.add("${entry.baseName}_burn.mp4")
+        // Permanent erase: app-private files AND Gallery / MediaStore copy
+        val names = linkedSetOf(
+            entry.videoFile?.name ?: "${entry.baseName}.mp4",
+            "${entry.baseName}.mp4",
+            "${entry.baseName}.webm",
+            "${entry.baseName}_burn.mp4",
+        )
+        GalleryPublisher.deletePublished(
+            context = context,
+            displayName = null,
+            galleryUri = entry.galleryUri,
+        )
+        names.forEach { GalleryPublisher.deleteByDisplayName(context, it) }
 
         entry.dataFile.delete()
         File(dataDir(context), "${entry.baseName}.xlsx").delete()
@@ -188,57 +207,6 @@ object RecordingStore {
         File(videosDir(context), "${entry.baseName}.webm").delete()
         File(videosDir(context), "${entry.baseName}_burn.mp4").delete()
         metaFile(context, entry.baseName).delete()
-
-        names.forEach { name ->
-            deletePublicVideoCopies(context, name)
-            deleteMediaStoreVideos(context, name)
-        }
-
         TagLogger.log(LogCategory.FILE, "DELETE_PERMANENT", entry.baseName)
-    }
-
-    private fun deletePublicVideoCopies(context: Context, fileName: String) {
-        val dirs = mutableListOf<File>()
-        dirs.add(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_MOVIES))
-        dirs.add(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM))
-        dirs.add(File(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DCIM), "Camera"))
-        dirs.add(Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS))
-        context.getExternalFilesDir(Environment.DIRECTORY_MOVIES)?.let { dirs.add(it) }
-        context.getExternalFilesDir(null)?.let { dirs.add(File(it, "videos")) }
-        dirs.forEach { dir ->
-            try {
-                File(dir, fileName).delete()
-            } catch (_: Exception) {
-            }
-        }
-    }
-
-    private fun deleteMediaStoreVideos(context: Context, fileName: String) {
-        try {
-            val resolver = context.contentResolver
-            val collection = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL)
-            } else {
-                MediaStore.Video.Media.EXTERNAL_CONTENT_URI
-            }
-            val projection = arrayOf(MediaStore.Video.Media._ID, MediaStore.Video.Media.DISPLAY_NAME)
-            resolver.query(
-                collection,
-                projection,
-                "${MediaStore.Video.Media.DISPLAY_NAME}=?",
-                arrayOf(fileName),
-                null,
-            )?.use { cursor ->
-                val idCol = cursor.getColumnIndexOrThrow(MediaStore.Video.Media._ID)
-                while (cursor.moveToNext()) {
-                    val id = cursor.getLong(idCol)
-                    val uri = ContentUris.withAppendedId(collection, id)
-                    resolver.delete(uri, null, null)
-                }
-            }
-            TagLogger.log(LogCategory.FILE, "MEDIASTORE_DELETE", fileName)
-        } catch (e: Exception) {
-            TagLogger.log(LogCategory.ERRORS, "MEDIASTORE_DELETE_FAIL", "${e.message} file=$fileName")
-        }
     }
 }
