@@ -303,7 +303,7 @@ class DeviceActivity : AppCompatActivity() {
         binding.cameraPreview.setTransform(matrix)
     }
 
-    /** Degrees to bake into the landscape file so content is upright for the current hold. */
+    /** Degrees to bake so content is upright in the saved portrait/landscape file. */
     private fun videoOrientationHint(): Int {
         val cameraId = activeCameraId ?: return if (isPortraitDisplay()) 90 else 0
         return try {

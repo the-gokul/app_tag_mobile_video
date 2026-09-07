@@ -225,43 +225,73 @@ class TimestampBurnOverlay(
     }
 
     /**
-     * Map landscape sensor frames into the output buffer upright.
-     * Portrait file = swapped size + 90/270 bake (exact fit). Landscape file = 0/180 bake.
+     * Draw camera frames upright into the encoder buffer without squashing.
+     * Uses an aspect-correct ortho so NDC x/y match pixels, then rotate + center-crop cover.
      */
     private fun cameraContentMvp(): FloatArray {
-        val mvp = FloatArray(16)
-        Matrix.setIdentityM(mvp, 0)
+        val viewW = videoWidth.toFloat().coerceAtLeast(1f)
+        val viewH = videoHeight.toFloat().coerceAtLeast(1f)
+        // Sensor / SurfaceTexture buffer is always landscape
+        val bufW = maxOf(videoWidth, videoHeight).toFloat()
+        val bufH = minOf(videoWidth, videoHeight).toFloat()
         val rot = ((contentRotation % 360) + 360) % 360
-        if (rot == 90 || rot == 270) {
-            if (!outputPortrait) {
-                // Rotating into landscape needs cover-crop
-                val cover = videoWidth.toFloat() / videoHeight.toFloat().coerceAtLeast(1f)
-                Matrix.scaleM(mvp, 0, cover, cover, 1f)
-            }
-            // Portrait output size is the 90° swap of the sensor frame — no extra scale
-        }
+
+        val ortho = FloatArray(16)
+        val aspect = viewW / viewH
+        Matrix.orthoM(ortho, 0, -aspect, aspect, -1f, 1f, -1f, 1f)
+
+        val model = FloatArray(16)
+        Matrix.setIdentityM(model, 0)
+
+        val viewOrthoW = 2f * aspect
+        val viewOrthoH = 2f
+        val bufAspect = bufW / bufH
+        val rotated = rot == 90 || rot == 270
+        // Unit quad is 2×2; scale X by bufAspect → landscape rectangle in isotropic space
+        val drawnW = if (rotated) 2f else 2f * bufAspect
+        val drawnH = if (rotated) 2f * bufAspect else 2f
+        val cover = maxOf(viewOrthoW / drawnW, viewOrthoH / drawnH)
+
+        // M = cover * rotate * aspectScale  (Android Matrix multiplies on the right)
+        Matrix.scaleM(model, 0, cover, cover, 1f)
         if (rot != 0) {
-            // Positive Z = CCW in GL; with SurfaceTexture/EGL Y-flip this matches
-            // MediaRecorder clockwise orientation for upright baked frames.
-            Matrix.rotateM(mvp, 0, rot.toFloat(), 0f, 0f, 1f)
+            // MediaRecorder orientation is clockwise; negate for GL CCW rotateM
+            Matrix.rotateM(model, 0, -rot.toFloat(), 0f, 0f, 1f)
         }
+        Matrix.scaleM(model, 0, bufAspect, 1f, 1f)
+
+        val mvp = FloatArray(16)
+        Matrix.multiplyMM(mvp, 0, ortho, 0, model, 0)
         return mvp
     }
 
-    /** Portrait → bottom-center; landscape → right-center. */
+    /** Portrait → bottom-center; landscape → right-center (aspect-correct, no stretch). */
     private fun timestampMvp(bw: Int, bh: Int): FloatArray {
-        val mvp = FloatArray(16)
-        Matrix.setIdentityM(mvp, 0)
-        val scaleX = (bw.toFloat() / videoWidth) * 2f
-        val scaleY = (bh.toFloat() / videoHeight) * 2f
-        val margin = 0.20f
+        val viewW = videoWidth.toFloat().coerceAtLeast(1f)
+        val viewH = videoHeight.toFloat().coerceAtLeast(1f)
+        val aspect = viewW / viewH
+
+        val ortho = FloatArray(16)
+        Matrix.orthoM(ortho, 0, -aspect, aspect, -1f, 1f, -1f, 1f)
+
+        // Size in isotropic ortho units (match pixel aspect)
+        val halfW = (bw.toFloat() / viewH) // bw/viewH * viewH/viewH... use viewH as unit
+        // Prefer: width in ortho = (bw/viewW)*viewOrthoW = bw/viewW * 2*aspect = 2*bw/viewH
+        val boxW = 2f * bw / viewH
+        val boxH = 2f * bh / viewH
+        val margin = 0.20f * 2f // ~20% of half-height → in ortho y units from edge
+
+        val model = FloatArray(16)
+        Matrix.setIdentityM(model, 0)
         if (outputPortrait) {
-            Matrix.translateM(mvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
-            Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+            Matrix.translateM(model, 0, 0f, -1f + margin / 2f + boxH / 2f, 0f)
         } else {
-            Matrix.translateM(mvp, 0, 1f - margin - scaleX / 2f, 0f, 0f)
-            Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+            Matrix.translateM(model, 0, aspect - margin / 2f - boxW / 2f, 0f, 0f)
         }
+        Matrix.scaleM(model, 0, boxW / 2f, boxH / 2f, 1f)
+
+        val mvp = FloatArray(16)
+        Matrix.multiplyMM(mvp, 0, ortho, 0, model, 0)
         return mvp
     }
 
