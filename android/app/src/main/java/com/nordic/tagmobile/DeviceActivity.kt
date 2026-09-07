@@ -3,14 +3,17 @@ package com.nordic.tagmobile
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
-import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.graphics.Matrix
+import android.graphics.RectF
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
+import android.media.CamcorderProfile
 import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
+import android.util.Size
 import android.view.MenuItem
 import android.view.Surface
 import android.view.TextureView
@@ -24,10 +27,10 @@ import com.nordic.tagmobile.ble.TagBleManager
 import com.nordic.tagmobile.databinding.ActivityDeviceBinding
 import com.nordic.tagmobile.log.LogCategory
 import com.nordic.tagmobile.log.TagLogger
-import com.nordic.tagmobile.model.CameraConfig
 import com.nordic.tagmobile.model.RecordingState
 import com.nordic.tagmobile.protocol.SensorPacketParser
 import com.nordic.tagmobile.protocol.SensorPacketParser.HEADER_SIZE
+import com.nordic.tagmobile.protocol.XlsxExporter
 import com.nordic.tagmobile.storage.RecordingStore
 import java.io.File
 import java.text.SimpleDateFormat
@@ -55,13 +58,16 @@ class DeviceActivity : AppCompatActivity() {
             timestampHandler?.postDelayed(this, 500)
         }
     }
-    private val cameraConfig: CameraConfig get() = TagSession.cameraConfig
+    private var previewSize: Size? = null
+    private var activeCameraId: String? = null
 
     private val surfaceListener = object : TextureView.SurfaceTextureListener {
         override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
             openCamera()
         }
-        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) = Unit
+        override fun onSurfaceTextureSizeChanged(st: SurfaceTexture, w: Int, h: Int) {
+            configureTransform(w, h)
+        }
         override fun onSurfaceTextureDestroyed(st: SurfaceTexture) = true
         override fun onSurfaceTextureUpdated(st: SurfaceTexture) = Unit
     }
@@ -164,8 +170,6 @@ class DeviceActivity : AppCompatActivity() {
             return
         }
 
-        applyOrientationFromConfig()
-
         binding.deviceTitle.text = device.name
         binding.backBtn.setOnClickListener { finish() }
         binding.deviceMenuBtn.setOnClickListener { showDeviceMenu(it) }
@@ -186,7 +190,6 @@ class DeviceActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        applyOrientationFromConfig()
         startBackgroundThread()
         if (binding.cameraPreview.isAvailable) {
             openCamera()
@@ -206,14 +209,6 @@ class DeviceActivity : AppCompatActivity() {
         super.onDestroy()
     }
 
-    private fun applyOrientationFromConfig() {
-        requestedOrientation = when (cameraConfig.orientation) {
-            CameraConfig.Orientation.PORTRAIT -> ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
-            CameraConfig.Orientation.LANDSCAPE -> ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
-            CameraConfig.Orientation.AUTO -> ActivityInfo.SCREEN_ORIENTATION_SENSOR
-        }
-    }
-
     @SuppressLint("MissingPermission")
     private fun openCamera() {
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
@@ -227,7 +222,51 @@ class DeviceActivity : AppCompatActivity() {
             val facing = manager.getCameraCharacteristics(id).get(CameraCharacteristics.LENS_FACING)
             facing == if (isFrontCamera) CameraCharacteristics.LENS_FACING_FRONT else CameraCharacteristics.LENS_FACING_BACK
         } ?: manager.cameraIdList.firstOrNull() ?: return
+        activeCameraId = cameraId
+        val characteristics = manager.getCameraCharacteristics(cameraId)
+        val map = characteristics.get(CameraCharacteristics.SCALER_STREAM_CONFIGURATION_MAP)
+        val choices = map?.getOutputSizes(SurfaceTexture::class.java)
+        previewSize = choosePreviewSize(choices)
+        previewSize?.let { size ->
+            binding.cameraPreview.surfaceTexture?.setDefaultBufferSize(size.width, size.height)
+            configureTransform(binding.cameraPreview.width, binding.cameraPreview.height)
+        }
         manager.openCamera(cameraId, cameraStateCallback, backgroundHandler)
+    }
+
+    /** Prefer a size close to view aspect (phone-camera style), avoid forced config resolution. */
+    private fun choosePreviewSize(choices: Array<Size>?): Size {
+        if (choices.isNullOrEmpty()) return Size(1280, 720)
+        val viewW = binding.cameraPreview.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
+        val viewH = binding.cameraPreview.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels
+        val viewAspect = viewW.toFloat() / viewH.toFloat()
+        return choices
+            .filter { it.width <= 1920 && it.height <= 1080 }
+            .minByOrNull { size ->
+                val aspect = size.width.toFloat() / size.height.toFloat()
+                kotlin.math.abs(aspect - viewAspect)
+            } ?: choices[0]
+    }
+
+    private fun configureTransform(viewWidth: Int, viewHeight: Int) {
+        val size = previewSize ?: return
+        if (viewWidth == 0 || viewHeight == 0) return
+        val rotation = windowManager.defaultDisplay.rotation
+        val matrix = Matrix()
+        val viewRect = RectF(0f, 0f, viewWidth.toFloat(), viewHeight.toFloat())
+        val bufferRect = RectF(0f, 0f, size.height.toFloat(), size.width.toFloat())
+        val centerX = viewRect.centerX()
+        val centerY = viewRect.centerY()
+        if (rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270) {
+            bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
+            matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
+            val scale = maxOf(viewHeight.toFloat() / size.height, viewWidth.toFloat() / size.width)
+            matrix.postScale(scale, scale, centerX, centerY)
+            matrix.postRotate((90 * (rotation - 2)).toFloat(), centerX, centerY)
+        } else if (rotation == Surface.ROTATION_180) {
+            matrix.postRotate(180f, centerX, centerY)
+        }
+        binding.cameraPreview.setTransform(matrix)
     }
 
     private fun toggleFlash() {
@@ -291,7 +330,6 @@ class DeviceActivity : AppCompatActivity() {
         popup.menu.add(0, 2, 0, getString(R.string.logs))
         popup.menu.add(0, 3, 0, getString(R.string.history))
         popup.menu.add(0, 4, 0, getString(R.string.profile))
-        popup.menu.add(0, 5, 0, getString(R.string.camera_settings))
         popup.setOnMenuItemClickListener { item: MenuItem ->
             when (item.itemId) {
                 1 -> {
@@ -310,10 +348,6 @@ class DeviceActivity : AppCompatActivity() {
                 }
                 4 -> {
                     startActivity(Intent(this, ProfileActivity::class.java))
-                    true
-                }
-                5 -> {
-                    startActivity(Intent(this, CameraConfigActivity::class.java))
                     true
                 }
                 else -> false
@@ -352,9 +386,24 @@ class DeviceActivity : AppCompatActivity() {
             profilePrefix = profilePrefix,
         )
 
-        val ext = if (cameraConfig.videoFormat == CameraConfig.VideoFormat.MP4) "mp4" else "webm"
         val videoDir = File(filesDir, "videos").also { it.mkdirs() }
-        videoFile = File(videoDir, "${TagSession.sessionBaseName}.$ext")
+        videoFile = File(videoDir, "${TagSession.sessionBaseName}.mp4")
+
+        // Phone-default camcorder profile (no CameraConfig forced size/orientation)
+        val camProfile = try {
+            val id = activeCameraId?.toIntOrNull()
+            when {
+                id != null && CamcorderProfile.hasProfile(id, CamcorderProfile.QUALITY_720P) ->
+                    CamcorderProfile.get(id, CamcorderProfile.QUALITY_720P)
+                id != null && CamcorderProfile.hasProfile(id, CamcorderProfile.QUALITY_HIGH) ->
+                    CamcorderProfile.get(id, CamcorderProfile.QUALITY_HIGH)
+                CamcorderProfile.hasProfile(CamcorderProfile.QUALITY_720P) ->
+                    CamcorderProfile.get(CamcorderProfile.QUALITY_720P)
+                else -> CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH)
+            }
+        } catch (_: Exception) {
+            CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH)
+        }
 
         // Prepare MediaRecorder before BLE Start so a camera failure does not leave the Tag streaming
         val mr: MediaRecorder
@@ -362,10 +411,11 @@ class DeviceActivity : AppCompatActivity() {
             @Suppress("DEPRECATION")
             mr = MediaRecorder().apply {
                 setVideoSource(MediaRecorder.VideoSource.SURFACE)
-                setOutputFormat(cameraConfig.videoFormat.outputFormat)
-                setVideoEncoder(cameraConfig.videoCodec.encoderValue)
-                setVideoSize(cameraConfig.resolution.width, cameraConfig.resolution.height)
-                setVideoFrameRate(cameraConfig.frameRate.fps)
+                setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
+                setVideoEncoder(MediaRecorder.VideoEncoder.H264)
+                setVideoSize(camProfile.videoFrameWidth, camProfile.videoFrameHeight)
+                setVideoFrameRate(camProfile.videoFrameRate)
+                setVideoEncodingBitRate(camProfile.videoBitRate)
                 setOutputFile(videoFile!!.absolutePath)
                 prepare()
             }
@@ -525,8 +575,20 @@ class DeviceActivity : AppCompatActivity() {
                 )
             }
             val dataFile = RecordingStore.dataFile(this, baseName)
-            val csvContent = com.nordic.tagmobile.protocol.CsvExporter.build(TagSession.receivedRows)
-            dataFile.writeText(csvContent, Charsets.UTF_8)
+            XlsxExporter.write(
+                outFile = dataFile,
+                rows = TagSession.receivedRows,
+                summary = XlsxExporter.SummaryInfo(
+                    profile = TagSession.userProfile,
+                    deviceConfig = TagSession.deviceConfig,
+                    deviceName = TagSession.connectedDevice?.name
+                        ?: TagSession.receivedRows.firstOrNull()?.deviceId
+                        ?: "Tag",
+                    packetCount = report.packetCount,
+                    sampleCount = report.sampleCount,
+                    status = report.statusShort,
+                ),
+            )
             
             val logBody = buildString {
                 appendLine("Tag session log")

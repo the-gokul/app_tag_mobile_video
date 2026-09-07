@@ -45,13 +45,13 @@
         <activity
             android:name=".DeviceActivity"
             android:exported="false"
-            android:screenOrientation="sensor" />
+            android:configChanges="orientation|screenSize|keyboardHidden" />
         <activity android:name=".CustomDataActivity" android:exported="false" />
         <activity android:name=".SettingsActivity" android:exported="false" />
         <activity android:name=".LogViewerActivity" android:exported="false" />
         <activity android:name=".HistoryActivity" android:exported="false" />
         <activity android:name=".ProfileActivity" android:exported="false" />
-        <activity android:name=".CameraConfigActivity" android:exported="false" />
+        <activity android:name=".AddProfileActivity" android:exported="false" />
 
         <provider
             android:name="androidx.core.content.FileProvider"

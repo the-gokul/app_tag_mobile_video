@@ -44,8 +44,17 @@ object RecordingStore {
         else "${safe}_${datePart}"
     }
 
+    /** Prefer .xlsx; fall back to legacy .csv for older recordings. */
     fun dataFile(context: Context, baseName: String): File =
-        File(dataDir(context), "$baseName.csv")
+        File(dataDir(context), "$baseName.xlsx")
+
+    fun findDataFile(context: Context, baseName: String): File? {
+        val xlsx = File(dataDir(context), "$baseName.xlsx")
+        if (xlsx.exists()) return xlsx
+        val csv = File(dataDir(context), "$baseName.csv")
+        if (csv.exists()) return csv
+        return null
+    }
 
     fun logFile(context: Context, baseName: String): File =
         File(logsDir(context), "$baseName.log")
@@ -70,7 +79,7 @@ object RecordingStore {
         sampleCount: Int,
         status: String,
     ): HistoryEntry {
-        val dataF = dataFile(context, baseName)
+        val dataF = findDataFile(context, baseName) ?: dataFile(context, baseName)
         val logF = logFile(context, baseName)
         val vidF = findVideoFile(context, baseName)
         logF.writeText(logContent, Charsets.UTF_8)
@@ -106,15 +115,19 @@ object RecordingStore {
         val dataRoot = dataDir(context)
         val logsRoot = logsDir(context)
         val bases = dataRoot.listFiles()
-            ?.filter { it.isFile && it.name.endsWith(".csv") }
-            ?.map { it.name.removeSuffix(".csv") }
+            ?.filter { it.isFile && (it.name.endsWith(".xlsx") || it.name.endsWith(".csv")) }
+            ?.map {
+                when {
+                    it.name.endsWith(".xlsx") -> it.name.removeSuffix(".xlsx")
+                    else -> it.name.removeSuffix(".csv")
+                }
+            }
             ?.distinct()
             ?: emptyList()
 
         return bases.mapNotNull { base ->
-            val dataF = File(dataRoot, "$base.csv")
+            val dataF = findDataFile(context, base) ?: return@mapNotNull null
             val logF = File(logsRoot, "$base.log")
-            if (!dataF.exists()) return@mapNotNull null
             val meta = metaFile(context, base)
             val (packets, samples, status, savedAt) = if (meta.exists()) {
                 try {
@@ -153,6 +166,9 @@ object RecordingStore {
 
     fun deleteEntry(context: Context, entry: HistoryEntry) {
         entry.dataFile.delete()
+        // Also remove sibling format if both exist
+        File(dataDir(context), "${entry.baseName}.xlsx").delete()
+        File(dataDir(context), "${entry.baseName}.csv").delete()
         entry.logFile.delete()
         entry.videoFile?.delete()
         metaFile(context, entry.baseName).delete()

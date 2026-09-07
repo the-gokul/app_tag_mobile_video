@@ -53,10 +53,9 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         setSupportActionBar(binding.toolbar)
 
-        // Load persisted profile + camera config into session
+        // Load persisted profile into session
         val profiles = com.nordic.tagmobile.model.UserProfile.loadAll(this)
         TagSession.userProfile = profiles.firstOrNull() ?: com.nordic.tagmobile.model.UserProfile()
-        TagSession.cameraConfig = com.nordic.tagmobile.model.CameraConfig.load(this)
 
         // First-run: force profile setup
         if (!TagSession.userProfile.isComplete) {
@@ -75,6 +74,12 @@ class MainActivity : AppCompatActivity() {
             if (TagSession.isConnected()) {
                 startActivity(Intent(this, DeviceActivity::class.java))
             }
+        }
+        binding.disconnectBtn.setOnClickListener {
+            TagApp.instance.bleManager.disconnectTag()
+            TagSession.clearConnection()
+            renderHome()
+            Toast.makeText(this, R.string.disconnected, Toast.LENGTH_SHORT).show()
         }
         requestAppPermissionsOnLaunch()
     }
@@ -187,6 +192,7 @@ class MainActivity : AppCompatActivity() {
             binding.connectedCard.visibility = View.VISIBLE
             binding.deviceName.text = device.name
             binding.deviceMac.text = device.address
+            binding.deviceRssiBars.setRssi(device.rssi)
             binding.deviceRssi.text = "${device.rssi} dBm"
         }
     }
