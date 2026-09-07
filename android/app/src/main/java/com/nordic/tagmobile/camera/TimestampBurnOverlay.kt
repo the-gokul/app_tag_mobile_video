@@ -24,9 +24,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Camera frames → OpenGL → MediaRecorder, burning a timestamp into the encoded video.
  *
- * Portrait hold → portrait file (H>W) with upright content + bottom timestamp.
- * Landscape hold → landscape file (W>H) with upright content + right timestamp.
- * Rotation is done in texture space (16:9→9:16) so content is not landscape-in-a-tall-box.
+ * Portrait hold → portrait file (H>W), timestamp at bottom.
+ * Landscape hold → landscape file (W>H), timestamp on the right.
+ * Sensor frames are rotated in UV space into the encoder buffer (orientation-hint = 0).
  */
 class TimestampBurnOverlay(
     private val outputSurface: Surface,
@@ -175,10 +175,10 @@ class TimestampBurnOverlay(
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-        // Camera OES frame — rotate in texture space so portrait file gets upright
-        // portrait pixels (not landscape content inside a tall container).
-        val camMvp = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
-        val texMatrix = cameraTexMatrix()
+        // Full-screen quad; rotate sensor frames in UV space so portrait/landscape
+        // buffers get upright pixels with no stretch (swapped size ↔ 90° is 1:1).
+        val posMvp = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
+        val texM = cameraTexMatrix()
         GLES20.glUseProgram(program)
         val aPos = GLES20.glGetAttribLocation(program, "aPosition")
         val aTex = GLES20.glGetAttribLocation(program, "aTexCoord")
@@ -194,8 +194,8 @@ class TimestampBurnOverlay(
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId)
         GLES20.glUniform1i(uTex, 0)
-        GLES20.glUniformMatrix4fv(uMvp, 1, false, camMvp, 0)
-        GLES20.glUniformMatrix4fv(uMat, 1, false, texMatrix, 0)
+        GLES20.glUniformMatrix4fv(uMvp, 1, false, posMvp, 0)
+        GLES20.glUniformMatrix4fv(uMat, 1, false, texM, 0)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
         // Portrait → bottom; landscape → right
@@ -228,60 +228,58 @@ class TimestampBurnOverlay(
     }
 
     /**
-     * Rotate camera UVs so a landscape sensor frame fills a portrait file upright
-     * (or stays upright in a landscape file). 16:9 rotated 90° matches 9:16 —
-     * no stretch. Preview transform is untouched.
+     * Degrees to rotate sensor (landscape) frames into the output buffer.
+     * Portrait file must always bake ~90/270 — otherwise content stays landscape inside a tall file.
+     */
+    private fun bakeDegrees(): Int {
+        val hint = ((contentRotation % 360) + 360) % 360
+        return if (outputPortrait) {
+            when (hint) {
+                0, 180 -> 90
+                else -> hint
+            }
+        } else {
+            when (hint) {
+                90, 270 -> 0
+                else -> hint
+            }
+        }
+    }
+
+    /**
+     * SurfaceTexture matrix + rotate about UV center.
+     * For portrait output (H>W) with landscape sensor buffer, 90° UV rotate maps 1:1
+     * onto the swapped encoder size — upright, no shrink.
      */
     private fun cameraTexMatrix(): FloatArray {
-        val rot = ((contentRotation % 360) + 360) % 360
-        // Portrait file must always turn the landscape sensor buffer; if hint is 0
-        // while output is portrait, still rotate 90°.
-        val degrees = when {
-            outputPortrait && (rot == 0 || rot == 180) -> 90
-            else -> rot
+        val rot = bakeDegrees()
+        val rotM = FloatArray(16)
+        Matrix.setIdentityM(rotM, 0)
+        if (rot != 0) {
+            Matrix.translateM(rotM, 0, 0.5f, 0.5f, 0f)
+            // Clockwise bake (matches Camera/MediaRecorder orientation degrees)
+            Matrix.rotateM(rotM, 0, -rot.toFloat(), 0f, 0f, 1f)
+            Matrix.translateM(rotM, 0, -0.5f, -0.5f, 0f)
         }
-        if (degrees == 0) return stMatrix
-
-        val r = FloatArray(16)
-        Matrix.setIdentityM(r, 0)
-        Matrix.translateM(r, 0, 0.5f, 0.5f, 0f)
-        // Clockwise in texture space (matches MediaRecorder orientation hint)
-        Matrix.rotateM(r, 0, -degrees.toFloat(), 0f, 0f, 1f)
-        Matrix.translateM(r, 0, -0.5f, -0.5f, 0f)
-
         val out = FloatArray(16)
-        // Apply SurfaceTexture transform first, then our orientation rotate
-        Matrix.multiplyMM(out, 0, r, 0, stMatrix, 0)
+        // Apply camera ST first, then rotate the sampled image
+        Matrix.multiplyMM(out, 0, rotM, 0, stMatrix, 0)
         return out
     }
 
-    /** Portrait → bottom-center; landscape → right-center (aspect-correct, no stretch). */
+    /** Portrait → bottom-center; landscape → right-center. */
     private fun timestampMvp(bw: Int, bh: Int): FloatArray {
-        val viewW = videoWidth.toFloat().coerceAtLeast(1f)
-        val viewH = videoHeight.toFloat().coerceAtLeast(1f)
-        val aspect = viewW / viewH
-
-        val ortho = FloatArray(16)
-        Matrix.orthoM(ortho, 0, -aspect, aspect, -1f, 1f, -1f, 1f)
-
-        // Size in isotropic ortho units (match pixel aspect)
-        val halfW = (bw.toFloat() / viewH) // bw/viewH * viewH/viewH... use viewH as unit
-        // Prefer: width in ortho = (bw/viewW)*viewOrthoW = bw/viewW * 2*aspect = 2*bw/viewH
-        val boxW = 2f * bw / viewH
-        val boxH = 2f * bh / viewH
-        val margin = 0.20f * 2f // ~20% of half-height → in ortho y units from edge
-
-        val model = FloatArray(16)
-        Matrix.setIdentityM(model, 0)
-        if (outputPortrait) {
-            Matrix.translateM(model, 0, 0f, -1f + margin / 2f + boxH / 2f, 0f)
-        } else {
-            Matrix.translateM(model, 0, aspect - margin / 2f - boxW / 2f, 0f, 0f)
-        }
-        Matrix.scaleM(model, 0, boxW / 2f, boxH / 2f, 1f)
-
         val mvp = FloatArray(16)
-        Matrix.multiplyMM(mvp, 0, ortho, 0, model, 0)
+        Matrix.setIdentityM(mvp, 0)
+        val scaleX = (bw.toFloat() / videoWidth.coerceAtLeast(1)) * 2f
+        val scaleY = (bh.toFloat() / videoHeight.coerceAtLeast(1)) * 2f
+        val margin = 0.20f
+        if (outputPortrait) {
+            Matrix.translateM(mvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
+        } else {
+            Matrix.translateM(mvp, 0, 1f - margin - scaleX / 2f, 0f, 0f)
+        }
+        Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
         return mvp
     }
 
