@@ -24,8 +24,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 /**
  * Camera frames → OpenGL → MediaRecorder, burning a timestamp into the encoded video.
  *
- * [contentRotation] is baked into pixels (orientation-hint stays 0).
- * Portrait output → timestamp at bottom; landscape output → timestamp on the right.
+ * Portrait hold → portrait file (H>W) with upright content + bottom timestamp.
+ * Landscape hold → landscape file (W>H) with upright content + right timestamp.
+ * Rotation is done in texture space (16:9→9:16) so content is not landscape-in-a-tall-box.
  */
 class TimestampBurnOverlay(
     private val outputSurface: Surface,
@@ -174,8 +175,10 @@ class TimestampBurnOverlay(
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-        // Camera OES frame — bake rotation into pixels
-        val camMvp = cameraContentMvp()
+        // Camera OES frame — rotate in texture space so portrait file gets upright
+        // portrait pixels (not landscape content inside a tall container).
+        val camMvp = FloatArray(16).also { Matrix.setIdentityM(it, 0) }
+        val texMatrix = cameraTexMatrix()
         GLES20.glUseProgram(program)
         val aPos = GLES20.glGetAttribLocation(program, "aPosition")
         val aTex = GLES20.glGetAttribLocation(program, "aTexCoord")
@@ -192,7 +195,7 @@ class TimestampBurnOverlay(
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId)
         GLES20.glUniform1i(uTex, 0)
         GLES20.glUniformMatrix4fv(uMvp, 1, false, camMvp, 0)
-        GLES20.glUniformMatrix4fv(uMat, 1, false, stMatrix, 0)
+        GLES20.glUniformMatrix4fv(uMat, 1, false, texMatrix, 0)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
         // Portrait → bottom; landscape → right
@@ -225,44 +228,31 @@ class TimestampBurnOverlay(
     }
 
     /**
-     * Draw camera frames upright into the encoder buffer without squashing.
-     * Uses an aspect-correct ortho so NDC x/y match pixels, then rotate + center-crop cover.
+     * Rotate camera UVs so a landscape sensor frame fills a portrait file upright
+     * (or stays upright in a landscape file). 16:9 rotated 90° matches 9:16 —
+     * no stretch. Preview transform is untouched.
      */
-    private fun cameraContentMvp(): FloatArray {
-        val viewW = videoWidth.toFloat().coerceAtLeast(1f)
-        val viewH = videoHeight.toFloat().coerceAtLeast(1f)
-        // Sensor / SurfaceTexture buffer is always landscape
-        val bufW = maxOf(videoWidth, videoHeight).toFloat()
-        val bufH = minOf(videoWidth, videoHeight).toFloat()
+    private fun cameraTexMatrix(): FloatArray {
         val rot = ((contentRotation % 360) + 360) % 360
-
-        val ortho = FloatArray(16)
-        val aspect = viewW / viewH
-        Matrix.orthoM(ortho, 0, -aspect, aspect, -1f, 1f, -1f, 1f)
-
-        val model = FloatArray(16)
-        Matrix.setIdentityM(model, 0)
-
-        val viewOrthoW = 2f * aspect
-        val viewOrthoH = 2f
-        val bufAspect = bufW / bufH
-        val rotated = rot == 90 || rot == 270
-        // Unit quad is 2×2; scale X by bufAspect → landscape rectangle in isotropic space
-        val drawnW = if (rotated) 2f else 2f * bufAspect
-        val drawnH = if (rotated) 2f * bufAspect else 2f
-        val cover = maxOf(viewOrthoW / drawnW, viewOrthoH / drawnH)
-
-        // M = cover * rotate * aspectScale  (Android Matrix multiplies on the right)
-        Matrix.scaleM(model, 0, cover, cover, 1f)
-        if (rot != 0) {
-            // MediaRecorder orientation is clockwise; negate for GL CCW rotateM
-            Matrix.rotateM(model, 0, -rot.toFloat(), 0f, 0f, 1f)
+        // Portrait file must always turn the landscape sensor buffer; if hint is 0
+        // while output is portrait, still rotate 90°.
+        val degrees = when {
+            outputPortrait && (rot == 0 || rot == 180) -> 90
+            else -> rot
         }
-        Matrix.scaleM(model, 0, bufAspect, 1f, 1f)
+        if (degrees == 0) return stMatrix
 
-        val mvp = FloatArray(16)
-        Matrix.multiplyMM(mvp, 0, ortho, 0, model, 0)
-        return mvp
+        val r = FloatArray(16)
+        Matrix.setIdentityM(r, 0)
+        Matrix.translateM(r, 0, 0.5f, 0.5f, 0f)
+        // Clockwise in texture space (matches MediaRecorder orientation hint)
+        Matrix.rotateM(r, 0, -degrees.toFloat(), 0f, 0f, 1f)
+        Matrix.translateM(r, 0, -0.5f, -0.5f, 0f)
+
+        val out = FloatArray(16)
+        // Apply SurfaceTexture transform first, then our orientation rotate
+        Matrix.multiplyMM(out, 0, r, 0, stMatrix, 0)
+        return out
     }
 
     /** Portrait → bottom-center; landscape → right-center (aspect-correct, no stretch). */
