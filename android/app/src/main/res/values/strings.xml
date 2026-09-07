@@ -52,8 +52,8 @@
     <string name="select_to_delete">Select files to delete</string>
     <string name="selected_count">%d selected</string>
     <string name="delete_permanently_title">Delete permanently?</string>
-    <string name="delete_permanently_message">Delete %d recording(s) permanently from this device?</string>
-    <string name="deleted_permanently">Deleted permanently from device</string>
+    <string name="delete_permanently_message">Delete %d recording(s) permanently from this device (app files and Gallery / Movies/Tag)?</string>
+    <string name="deleted_permanently">Deleted permanently from device and Gallery</string>
     <string name="disconnected">Disconnected</string>
     <string name="open_camera">Open Camera</string>
     <string name="camera_settings">Camera Settings</string>

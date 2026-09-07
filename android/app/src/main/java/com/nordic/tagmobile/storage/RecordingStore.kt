@@ -170,7 +170,10 @@ object RecordingStore {
         File(dataDir(context), "${entry.baseName}.xlsx").delete()
         File(dataDir(context), "${entry.baseName}.csv").delete()
         entry.logFile.delete()
+        val videoName = entry.videoFile?.name
         entry.videoFile?.delete()
+        // Erase Gallery / Movies/Tag copy too (permanent delete from device)
+        GalleryPublisher.deletePublishedVideo(context, videoName)
         metaFile(context, entry.baseName).delete()
     }
 }

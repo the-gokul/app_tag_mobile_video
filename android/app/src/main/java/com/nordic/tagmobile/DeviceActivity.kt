@@ -484,10 +484,13 @@ class DeviceActivity : AppCompatActivity() {
             CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH)
         }
 
-        // Always save landscape pixels (width > height). Bake rotation into frames;
-        // do not rely on MediaRecorder orientation-hint metadata (breaks burned timestamp).
-        val videoW = maxOf(camProfile.videoFrameWidth, camProfile.videoFrameHeight)
-        val videoH = minOf(camProfile.videoFrameWidth, camProfile.videoFrameHeight)
+        // Portrait hold → portrait file (H>W); landscape hold → landscape file (W>H).
+        // Bake rotation into pixels; keep orientation-hint at 0 so burned timestamp stays correct.
+        val longSide = maxOf(camProfile.videoFrameWidth, camProfile.videoFrameHeight)
+        val shortSide = minOf(camProfile.videoFrameWidth, camProfile.videoFrameHeight)
+        val portrait = isPortraitDisplay()
+        val videoW = if (portrait) shortSide else longSide
+        val videoH = if (portrait) longSide else shortSide
         val contentRotation = videoOrientationHint()
         val mr: MediaRecorder
         try {

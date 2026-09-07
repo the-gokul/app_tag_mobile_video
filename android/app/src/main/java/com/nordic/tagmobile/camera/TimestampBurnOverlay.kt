@@ -22,21 +22,21 @@ import java.nio.FloatBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Camera frames → OpenGL → MediaRecorder, burning a UI-matching timestamp overlay
- * into the encoded video.
+ * Camera frames → OpenGL → MediaRecorder, burning a timestamp into the encoded video.
  *
- * Output is always a landscape buffer. [contentRotation] is baked into the pixels
- * (no MediaRecorder orientation-hint metadata), so portrait/landscape holds both
- * save as upright landscape. Timestamp is drawn at bottom-center like the live UI.
+ * [contentRotation] is baked into pixels (orientation-hint stays 0).
+ * Portrait output → timestamp at bottom; landscape output → timestamp on the right.
  */
 class TimestampBurnOverlay(
     private val outputSurface: Surface,
     private val videoWidth: Int,
     private val videoHeight: Int,
-    /** Degrees to rotate camera content so it is upright in the landscape file (0/90/180/270). */
+    /** Degrees to rotate camera content so it is upright in the saved file (0/90/180/270). */
     private val contentRotation: Int,
     private val timestampText: () -> String,
 ) : SurfaceTexture.OnFrameAvailableListener {
+
+    private val outputPortrait: Boolean get() = videoHeight > videoWidth
 
     private val running = AtomicBoolean(false)
     private var thread: HandlerThread? = null
@@ -145,8 +145,11 @@ class TimestampBurnOverlay(
     private fun initGl() {
         oesTexId = createOesTexture()
         textTexId = createTexture2D()
+        // Camera sensor frames are landscape; MVP maps them into portrait or landscape output
+        val bufW = maxOf(videoWidth, videoHeight)
+        val bufH = minOf(videoWidth, videoHeight)
         surfaceTexture = SurfaceTexture(oesTexId).also {
-            it.setDefaultBufferSize(videoWidth, videoHeight)
+            it.setDefaultBufferSize(bufW, bufH)
             it.setOnFrameAvailableListener(this, handler)
         }
         cameraInputSurface = Surface(surfaceTexture)
@@ -171,7 +174,7 @@ class TimestampBurnOverlay(
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-        // Camera OES frame — bake rotation into pixels (always landscape file)
+        // Camera OES frame — bake rotation into pixels
         val camMvp = cameraContentMvp()
         GLES20.glUseProgram(program)
         val aPos = GLES20.glGetAttribLocation(program, "aPosition")
@@ -192,11 +195,11 @@ class TimestampBurnOverlay(
         GLES20.glUniformMatrix4fv(uMat, 1, false, stMatrix, 0)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
-        // Timestamp at bottom-center (same place as live camera TextView)
+        // Portrait → bottom; landscape → right
         val label = timestampText()
         val bmp = renderTimestampBitmap(label)
         uploadBitmap(textTexId, bmp)
-        val textMvp = bottomCenterTimestampMvp(bmp.width, bmp.height)
+        val textMvp = timestampMvp(bmp.width, bmp.height)
         GLES20.glEnable(GLES20.GL_BLEND)
         GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
         GLES20.glUseProgram(textProgram)
@@ -221,33 +224,44 @@ class TimestampBurnOverlay(
         EGL14.eglSwapBuffers(eglDisplay, eglSurface)
     }
 
-    /** Rotate+cover so upright content fills the landscape encoder buffer. */
+    /**
+     * Map landscape sensor frames into the output buffer upright.
+     * Portrait file = swapped size + 90/270 bake (exact fit). Landscape file = 0/180 bake.
+     */
     private fun cameraContentMvp(): FloatArray {
         val mvp = FloatArray(16)
         Matrix.setIdentityM(mvp, 0)
         val rot = ((contentRotation % 360) + 360) % 360
         if (rot == 90 || rot == 270) {
-            // After 90/270, aspect flips — scale to center-crop fill landscape
-            val cover = videoWidth.toFloat() / videoHeight.toFloat()
-            Matrix.scaleM(mvp, 0, cover, cover, 1f)
+            if (!outputPortrait) {
+                // Rotating into landscape needs cover-crop
+                val cover = videoWidth.toFloat() / videoHeight.toFloat().coerceAtLeast(1f)
+                Matrix.scaleM(mvp, 0, cover, cover, 1f)
+            }
+            // Portrait output size is the 90° swap of the sensor frame — no extra scale
         }
         if (rot != 0) {
-            // MediaRecorder orientation hint is clockwise; OpenGL rotateM is CCW → negate
-            Matrix.rotateM(mvp, 0, -rot.toFloat(), 0f, 0f, 1f)
+            // Positive Z = CCW in GL; with SurfaceTexture/EGL Y-flip this matches
+            // MediaRecorder clockwise orientation for upright baked frames.
+            Matrix.rotateM(mvp, 0, rot.toFloat(), 0f, 0f, 1f)
         }
         return mvp
     }
 
-    /** Bottom-center, matching activity_device timestamp above the record control. */
-    private fun bottomCenterTimestampMvp(bw: Int, bh: Int): FloatArray {
+    /** Portrait → bottom-center; landscape → right-center. */
+    private fun timestampMvp(bw: Int, bh: Int): FloatArray {
         val mvp = FloatArray(16)
         Matrix.setIdentityM(mvp, 0)
         val scaleX = (bw.toFloat() / videoWidth) * 2f
         val scaleY = (bh.toFloat() / videoHeight) * 2f
-        // ~same visual slot as UI: above bottom controls
-        val margin = 0.22f
-        Matrix.translateM(mvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
-        Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+        val margin = 0.20f
+        if (outputPortrait) {
+            Matrix.translateM(mvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
+            Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+        } else {
+            Matrix.translateM(mvp, 0, 1f - margin - scaleX / 2f, 0f, 0f)
+            Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+        }
         return mvp
     }
 
