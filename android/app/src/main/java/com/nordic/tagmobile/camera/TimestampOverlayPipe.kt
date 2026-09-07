@@ -148,8 +148,8 @@ class TimestampOverlayPipe(
             EGL14.EGL_GREEN_SIZE, 8,
             EGL14.EGL_BLUE_SIZE, 8,
             EGL14.EGL_ALPHA_SIZE, 8,
-            EGL14.EGL_RENDERABLE_TYPE, EGLExt.EGL_OPENGL_ES2_BIT,
-            EGL14.EGL_RECORDABLE_ANDROID, 1,
+            EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
+            EGLExt.EGL_RECORDABLE_ANDROID, 1,
             EGL14.EGL_NONE,
         )
         val configs = arrayOfNulls<EGLConfig>(1)
