@@ -5,11 +5,13 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
+import android.graphics.Bitmap
 import android.graphics.Matrix
 import android.graphics.RectF
 import android.graphics.SurfaceTexture
 import android.hardware.camera2.*
 import android.media.CamcorderProfile
+import android.media.MediaMetadataRetriever
 import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.Handler
@@ -23,6 +25,7 @@ import android.widget.PopupMenu
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.nordic.tagmobile.analysis.SessionAnalyzer
 import com.nordic.tagmobile.ble.TagBleManager
 import com.nordic.tagmobile.databinding.ActivityDeviceBinding
@@ -32,6 +35,8 @@ import com.nordic.tagmobile.model.RecordingState
 import com.nordic.tagmobile.protocol.SensorPacketParser
 import com.nordic.tagmobile.protocol.SensorPacketParser.HEADER_SIZE
 import com.nordic.tagmobile.protocol.XlsxExporter
+import com.nordic.tagmobile.camera.TimestampOverlayPipe
+import com.nordic.tagmobile.storage.GalleryPublisher
 import com.nordic.tagmobile.storage.RecordingStore
 import java.io.File
 import java.text.SimpleDateFormat
@@ -46,9 +51,11 @@ class DeviceActivity : AppCompatActivity() {
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var mediaRecorder: MediaRecorder? = null
+    private var overlayPipe: TimestampOverlayPipe? = null
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
     private var videoFile: File? = null
+    private var lastVideoFile: File? = null
     private var isRecording = false
     private var isFlashOn = false
     private var isFrontCamera = false
@@ -182,7 +189,9 @@ class DeviceActivity : AppCompatActivity() {
         }
         binding.flashBtn.setOnClickListener { toggleFlash() }
         binding.switchCameraBtn.setOnClickListener { switchCamera() }
+        binding.lastVideoThumb.setOnClickListener { openLastVideo() }
         setRecordButtonUi(recording = false)
+        refreshLastVideoThumb()
 
         bleManager.listener = bleListener
         
@@ -195,6 +204,7 @@ class DeviceActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         startBackgroundThread()
+        refreshLastVideoThumb()
         if (binding.cameraPreview.isAvailable) {
             openCamera()
         } else {
@@ -341,7 +351,16 @@ class DeviceActivity : AppCompatActivity() {
     private fun closeCamera() {
         captureSession?.close(); captureSession = null
         cameraDevice?.close(); cameraDevice = null
+        releaseOverlayPipe()
         mediaRecorder?.release(); mediaRecorder = null
+    }
+
+    private fun releaseOverlayPipe() {
+        try {
+            overlayPipe?.release()
+        } catch (_: Exception) {
+        }
+        overlayPipe = null
     }
 
     private fun startPreview() {
@@ -485,12 +504,33 @@ class DeviceActivity : AppCompatActivity() {
         }
         mediaRecorder = mr
 
+        // Burn live timestamp into the encoded video (preview UI TextView is separate)
+        val pipe = try {
+            TimestampOverlayPipe(
+                encoderSurface = mr.surface,
+                videoWidth = camProfile.videoFrameWidth,
+                videoHeight = camProfile.videoFrameHeight,
+            ).also { it.start() }
+        } catch (e: Exception) {
+            TagLogger.log(LogCategory.ERRORS, "OVERLAY_PIPE_FAIL", e.message ?: "")
+            try {
+                mr.reset(); mr.release()
+            } catch (_: Exception) {
+            }
+            mediaRecorder = null
+            videoFile?.delete()
+            videoFile = null
+            Toast.makeText(this, "Video overlay setup failed: ${e.message}", Toast.LENGTH_LONG).show()
+            return
+        }
+        overlayPipe = pipe
+
         val previewSurface = Surface(texture)
-        val recorderSurface = mr.surface
+        val overlaySurface = pipe.inputSurface
         val request = try {
             camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(previewSurface)
-                addTarget(recorderSurface)
+                addTarget(overlaySurface)
                 set(
                     CaptureRequest.FLASH_MODE,
                     if (isFlashOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF,
@@ -504,7 +544,7 @@ class DeviceActivity : AppCompatActivity() {
         captureSession?.close()
         try {
             camera.createCaptureSession(
-                listOf(previewSurface, recorderSurface),
+                listOf(previewSurface, overlaySurface),
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
                         captureSession = session
@@ -561,6 +601,7 @@ class DeviceActivity : AppCompatActivity() {
         mediaRecorder = null
         videoFile?.delete()
         videoFile = null
+        releaseOverlayPipe()
         TagSession.sessionBaseName = ""
         TagSession.recordingState = RecordingState.IDLE
         isRecording = false
@@ -578,9 +619,15 @@ class DeviceActivity : AppCompatActivity() {
         bleManager.stopRecording()
         TagLogger.log(LogCategory.CONTROL, "STOP", deviceLabel())
 
-        // Stop video
+        // Stop video encode path (camera session first, then overlay, then recorder)
         try {
             captureSession?.stopRepeating()
+            captureSession?.close()
+            captureSession = null
+        } catch (_: Exception) {
+        }
+        releaseOverlayPipe()
+        try {
             mediaRecorder?.stop()
         } catch (e: Exception) {
             TagLogger.log(LogCategory.ERRORS, "VIDEO_STOP_ERR", e.message ?: "")
@@ -593,6 +640,9 @@ class DeviceActivity : AppCompatActivity() {
 
         val vFile = videoFile
         val vSize = vFile?.length()?.let { formatBytes(it) } ?: "?"
+        if (vFile != null && vFile.exists() && vFile.length() > 0L) {
+            GalleryPublisher.publishVideo(this, vFile)
+        }
 
         // Save data files (CSV/Log)
         val report = SessionAnalyzer.analyze(
@@ -666,7 +716,7 @@ class DeviceActivity : AppCompatActivity() {
             TagSession.lastHistoryEntry = entry
             TagSession.lastFeedbackText = report.feedbackText
             TagSession.recordingState = RecordingState.RECEIVED
-            Toast.makeText(this, "Saved ${entry.baseName}\nVideo: $vSize", Toast.LENGTH_LONG).show()
+            Toast.makeText(this, "Saved ${entry.baseName}\nVideo: $vSize (also in Gallery)", Toast.LENGTH_LONG).show()
         } catch (e: Exception) {
             TagLogger.log(LogCategory.ERRORS, "AUTO_SAVE_FAIL", e.message ?: "")
             TagSession.recordingState = RecordingState.RECEIVED
@@ -676,6 +726,70 @@ class DeviceActivity : AppCompatActivity() {
                     "Save failed: ${e.message}",
                 )
             Toast.makeText(this, "Auto-save failed: ${e.message}", Toast.LENGTH_LONG).show()
+        }
+        refreshLastVideoThumb()
+    }
+
+    private fun latestVideoFile(): File? {
+        val dir = File(filesDir, "videos")
+        if (!dir.isDirectory) return null
+        return dir.listFiles()
+            ?.filter { it.isFile && (it.extension.equals("mp4", true) || it.extension.equals("webm", true)) && it.length() > 0L }
+            ?.maxByOrNull { it.lastModified() }
+    }
+
+    private fun refreshLastVideoThumb() {
+        val file = latestVideoFile()
+        lastVideoFile = file
+        if (file == null) {
+            binding.lastVideoThumb.setImageDrawable(null)
+            binding.lastVideoThumb.visibility = View.GONE
+            return
+        }
+        val frame = extractVideoFrame(file)
+        if (frame == null) {
+            binding.lastVideoThumb.setImageDrawable(null)
+            binding.lastVideoThumb.visibility = View.VISIBLE
+            return
+        }
+        binding.lastVideoThumb.setImageBitmap(frame)
+        binding.lastVideoThumb.visibility = View.VISIBLE
+        binding.lastVideoThumb.clipToOutline = true
+    }
+
+    private fun extractVideoFrame(file: File): Bitmap? {
+        val retriever = MediaMetadataRetriever()
+        return try {
+            retriever.setDataSource(file.absolutePath)
+            retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+                ?: retriever.frameAtTime
+        } catch (_: Exception) {
+            null
+        } finally {
+            try {
+                retriever.release()
+            } catch (_: Exception) {
+            }
+        }
+    }
+
+    private fun openLastVideo() {
+        if (isRecording) return
+        val file = lastVideoFile ?: latestVideoFile()
+        if (file == null || !file.exists()) {
+            Toast.makeText(this, R.string.no_last_video, Toast.LENGTH_SHORT).show()
+            return
+        }
+        try {
+            val uri = FileProvider.getUriForFile(this, "$packageName.fileprovider", file)
+            val intent = Intent(Intent.ACTION_VIEW).apply {
+                setDataAndType(uri, "video/*")
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            startActivity(Intent.createChooser(intent, getString(R.string.last_video)))
+        } catch (e: Exception) {
+            TagLogger.log(LogCategory.ERRORS, "OPEN_LAST_VIDEO_FAIL", e.message ?: "")
+            Toast.makeText(this, R.string.open_last_video_failed, Toast.LENGTH_SHORT).show()
         }
     }
 

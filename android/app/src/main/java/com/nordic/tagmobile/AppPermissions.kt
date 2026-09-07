@@ -26,10 +26,21 @@ object AppPermissions {
             emptyArray()
         }
 
+    fun mediaVideo(): Array<String> =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            arrayOf(Manifest.permission.READ_MEDIA_VIDEO)
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            emptyArray()
+        } else {
+            arrayOf(Manifest.permission.READ_EXTERNAL_STORAGE)
+        }
+
     fun camera(): Array<String> = arrayOf(
         Manifest.permission.CAMERA,
     )
 
     fun all(): Array<String> =
-        (ble().toList() + legacyStorage().toList() + camera().toList()).distinct().toTypedArray()
+        (ble().toList() + legacyStorage().toList() + mediaVideo().toList() + camera().toList())
+            .distinct()
+            .toTypedArray()
 }

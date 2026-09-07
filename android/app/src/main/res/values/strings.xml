@@ -8,7 +8,9 @@
     <string name="connecting">Connecting…</string>
     <string name="connected">Connected</string>
     <string name="disconnect">Disconnect</string>
-    <string name="start">Start</string>
+    <string name="last_video">Last video</string>
+    <string name="open_last_video_failed">Could not open video</string>
+    <string name="no_last_video">No previous video yet</string>
     <string name="stop">Stop</string>
     <string name="save">Save</string>
     <string name="export">Export</string>
