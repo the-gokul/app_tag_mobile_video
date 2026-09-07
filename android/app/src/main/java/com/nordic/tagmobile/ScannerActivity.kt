@@ -156,7 +156,7 @@ class ScannerActivity : AppCompatActivity() {
     private fun startScanning() {
         bleManager.listener = bleListener
         bleScanner.listener = scanListener
-        TagLogger.log(LogCategory.BLE, "SCAN_START", "all BLE devices, sort=name")
+        TagLogger.log(LogCategory.BLE, "SCAN_START", "Tag-only (name Tag/Tag_* or TAG_STREAM UUID)")
         bleScanner.start()
     }
 

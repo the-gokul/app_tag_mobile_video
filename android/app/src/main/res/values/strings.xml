@@ -8,7 +8,6 @@
     <string name="connecting">Connecting…</string>
     <string name="connected">Connected</string>
     <string name="disconnect">Disconnect</string>
-    <string name="start">Start</string>
     <string name="last_video">Last video</string>
     <string name="open_last_video_failed">Could not open video</string>
     <string name="no_last_video">No previous video yet</string>
@@ -22,8 +21,8 @@
     <string name="grant_permissions">Grant</string>
     <string name="bluetooth_required">Turn on Bluetooth to scan.</string>
     <string name="location_required">Turn on Location (required for BLE scan on Android 11).</string>
-    <string name="scanning_for_tags">Scanning all nearby BLE devices…\n\nAny BLE device will appear. Only Tag GATT will connect successfully.</string>
-    <string name="devices_found">%d devices</string>
+    <string name="scanning_for_tags">Scanning for Tag devices…\n\nOnly devices named Tag / Tag_* or advertising TAG_STREAM are listed.</string>
+    <string name="devices_found">%d Tag device(s)</string>
     <string name="menu">Menu</string>
     <string name="settings">Settings</string>
     <string name="logs">Logs</string>

@@ -14,8 +14,8 @@ import no.nordicsemi.android.support.v18.scanner.ScanSettings
 import java.util.UUID
 
 /**
- * Scans nearby BLE like nRF Connect default scanner (legacy 1M, no UUID filter).
- * Tag devices are recognized by GAP name Tag_* and/or TAG_STREAM UUID in the advert.
+ * Scans nearby BLE (legacy 1M) and lists only Tag-like devices:
+ * GAP name Tag / Tag_* and/or TAG_STREAM UUID in the advert.
  */
 class TagBleScanner(context: Context) {
 
@@ -35,7 +35,9 @@ class TagBleScanner(context: Context) {
             val record = result.scanRecord
             val name = resolveName(device, record, hasTagServiceUuid(record))
             val isTag = hasTagServiceUuid(record) || looksLikeTagName(name)
-            listener?.onDevice(device, result.rssi, name, isTag)
+            // Hide phones / IoT / unknown BLE — only show Tag candidates
+            if (!isTag) return
+            listener?.onDevice(device, result.rssi, name, true)
         }
 
         override fun onBatchScanResults(results: MutableList<ScanResult>) {

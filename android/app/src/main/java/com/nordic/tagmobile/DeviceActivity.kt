@@ -35,7 +35,7 @@ import com.nordic.tagmobile.model.RecordingState
 import com.nordic.tagmobile.protocol.SensorPacketParser
 import com.nordic.tagmobile.protocol.SensorPacketParser.HEADER_SIZE
 import com.nordic.tagmobile.protocol.XlsxExporter
-import com.nordic.tagmobile.camera.TimestampOverlayPipe
+import com.nordic.tagmobile.camera.TimestampBurnOverlay
 import com.nordic.tagmobile.storage.GalleryPublisher
 import com.nordic.tagmobile.storage.RecordingStore
 import java.io.File
@@ -51,11 +51,11 @@ class DeviceActivity : AppCompatActivity() {
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var mediaRecorder: MediaRecorder? = null
-    private var overlayPipe: TimestampOverlayPipe? = null
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
     private var videoFile: File? = null
     private var lastVideoFile: File? = null
+    private var timestampOverlay: TimestampBurnOverlay? = null
     private var isRecording = false
     private var isFlashOn = false
     private var isFrontCamera = false
@@ -143,6 +143,14 @@ class DeviceActivity : AppCompatActivity() {
                     // Tag rejected Start after camera already rolled — stop video and reset UI
                     try {
                         captureSession?.stopRepeating()
+                    } catch (_: Exception) {
+                    }
+                    try {
+                        timestampOverlay?.release()
+                    } catch (_: Exception) {
+                    }
+                    timestampOverlay = null
+                    try {
                         mediaRecorder?.stop()
                     } catch (_: Exception) {
                     }
@@ -349,18 +357,14 @@ class DeviceActivity : AppCompatActivity() {
     }
 
     private fun closeCamera() {
-        captureSession?.close(); captureSession = null
-        cameraDevice?.close(); cameraDevice = null
-        releaseOverlayPipe()
-        mediaRecorder?.release(); mediaRecorder = null
-    }
-
-    private fun releaseOverlayPipe() {
         try {
-            overlayPipe?.release()
+            timestampOverlay?.release()
         } catch (_: Exception) {
         }
-        overlayPipe = null
+        timestampOverlay = null
+        captureSession?.close(); captureSession = null
+        cameraDevice?.close(); cameraDevice = null
+        mediaRecorder?.release(); mediaRecorder = null
     }
 
     private fun startPreview() {
@@ -481,6 +485,7 @@ class DeviceActivity : AppCompatActivity() {
         }
 
         // Prepare MediaRecorder before BLE Start so a camera failure does not leave the Tag streaming
+        val orientationHint = videoOrientationHint()
         val mr: MediaRecorder
         try {
             @Suppress("DEPRECATION")
@@ -491,7 +496,7 @@ class DeviceActivity : AppCompatActivity() {
                 setVideoSize(camProfile.videoFrameWidth, camProfile.videoFrameHeight)
                 setVideoFrameRate(camProfile.videoFrameRate)
                 setVideoEncodingBitRate(camProfile.videoBitRate)
-                setOrientationHint(videoOrientationHint())
+                setOrientationHint(orientationHint)
                 setOutputFile(videoFile!!.absolutePath)
                 prepare()
             }
@@ -504,17 +509,20 @@ class DeviceActivity : AppCompatActivity() {
         }
         mediaRecorder = mr
 
-        // Burn live timestamp into the encoded video (preview UI TextView is separate)
-        val pipe = try {
-            TimestampOverlayPipe(
-                encoderSurface = mr.surface,
+        // Burn UI-matching timestamp into the encoded video (preview TextView unchanged)
+        val overlay = try {
+            TimestampBurnOverlay(
+                outputSurface = mr.surface,
                 videoWidth = camProfile.videoFrameWidth,
                 videoHeight = camProfile.videoFrameHeight,
+                orientationHint = orientationHint,
+                timestampText = { currentTimestamp() },
             ).also { it.start() }
         } catch (e: Exception) {
-            TagLogger.log(LogCategory.ERRORS, "OVERLAY_PIPE_FAIL", e.message ?: "")
+            TagLogger.log(LogCategory.ERRORS, "TIMESTAMP_OVERLAY_ERR", e.message ?: "")
             try {
-                mr.reset(); mr.release()
+                mr.reset()
+                mr.release()
             } catch (_: Exception) {
             }
             mediaRecorder = null
@@ -523,14 +531,18 @@ class DeviceActivity : AppCompatActivity() {
             Toast.makeText(this, "Video overlay setup failed: ${e.message}", Toast.LENGTH_LONG).show()
             return
         }
-        overlayPipe = pipe
+        timestampOverlay = overlay
+        val recorderInput = overlay.cameraInputSurface
+        if (recorderInput == null) {
+            abortStartAfterCameraFail("Overlay surface missing")
+            return
+        }
 
         val previewSurface = Surface(texture)
-        val overlaySurface = pipe.inputSurface
         val request = try {
             camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(previewSurface)
-                addTarget(overlaySurface)
+                addTarget(recorderInput)
                 set(
                     CaptureRequest.FLASH_MODE,
                     if (isFlashOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF,
@@ -544,7 +556,7 @@ class DeviceActivity : AppCompatActivity() {
         captureSession?.close()
         try {
             camera.createCaptureSession(
-                listOf(previewSurface, overlaySurface),
+                listOf(previewSurface, recorderInput),
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
                         captureSession = session
@@ -591,6 +603,11 @@ class DeviceActivity : AppCompatActivity() {
     private fun abortStartAfterCameraFail(message: String) {
         TagLogger.log(LogCategory.ERRORS, "VIDEO_START_ABORT", message)
         try {
+            timestampOverlay?.release()
+        } catch (_: Exception) {
+        }
+        timestampOverlay = null
+        try {
             mediaRecorder?.reset()
         } catch (_: Exception) {
         }
@@ -601,7 +618,6 @@ class DeviceActivity : AppCompatActivity() {
         mediaRecorder = null
         videoFile?.delete()
         videoFile = null
-        releaseOverlayPipe()
         TagSession.sessionBaseName = ""
         TagSession.recordingState = RecordingState.IDLE
         isRecording = false
@@ -619,14 +635,17 @@ class DeviceActivity : AppCompatActivity() {
         bleManager.stopRecording()
         TagLogger.log(LogCategory.CONTROL, "STOP", deviceLabel())
 
-        // Stop video encode path (camera session first, then overlay, then recorder)
+        // Stop camera request first, then overlay, then MediaRecorder
         try {
             captureSession?.stopRepeating()
-            captureSession?.close()
-            captureSession = null
         } catch (_: Exception) {
         }
-        releaseOverlayPipe()
+        try {
+            timestampOverlay?.release()
+        } catch (e: Exception) {
+            TagLogger.log(LogCategory.ERRORS, "OVERLAY_STOP_ERR", e.message ?: "")
+        }
+        timestampOverlay = null
         try {
             mediaRecorder?.stop()
         } catch (e: Exception) {
@@ -640,8 +659,12 @@ class DeviceActivity : AppCompatActivity() {
 
         val vFile = videoFile
         val vSize = vFile?.length()?.let { formatBytes(it) } ?: "?"
+        // Publish a copy into Movies/Tag so Gallery / Photos can see it
         if (vFile != null && vFile.exists() && vFile.length() > 0L) {
-            GalleryPublisher.publishVideo(this, vFile)
+            val galleryUri = GalleryPublisher.publishVideo(this, vFile)
+            if (galleryUri != null) {
+                TagLogger.log(LogCategory.FILE, "GALLERY_URI", galleryUri.toString())
+            }
         }
 
         // Save data files (CSV/Log)
