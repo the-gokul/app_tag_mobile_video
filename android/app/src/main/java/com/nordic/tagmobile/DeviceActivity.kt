@@ -3,6 +3,7 @@ package com.nordic.tagmobile
 import android.Manifest
 import android.annotation.SuppressLint
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.content.pm.PackageManager
 import android.graphics.Matrix
 import android.graphics.RectF
@@ -148,8 +149,7 @@ class DeviceActivity : AppCompatActivity() {
                     isRecording = false
                     TagSession.recordingState = RecordingState.IDLE
                     TagSession.sessionBaseName = ""
-                    binding.recordBtnInner.setBackgroundResource(R.drawable.bg_record_btn_inner)
-                    binding.recordBtnLabel.text = getString(R.string.start)
+                    setRecordButtonUi(recording = false)
                     startPreview()
                     Toast.makeText(this@DeviceActivity, message, Toast.LENGTH_LONG).show()
                 } else {
@@ -170,6 +170,9 @@ class DeviceActivity : AppCompatActivity() {
             return
         }
 
+        // Freeze current phone orientation — no auto-rotate while recording
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LOCKED
+
         binding.deviceTitle.text = device.name
         binding.backBtn.setOnClickListener { finish() }
         binding.deviceMenuBtn.setOnClickListener { showDeviceMenu(it) }
@@ -179,6 +182,7 @@ class DeviceActivity : AppCompatActivity() {
         }
         binding.flashBtn.setOnClickListener { toggleFlash() }
         binding.switchCameraBtn.setOnClickListener { switchCamera() }
+        setRecordButtonUi(recording = false)
 
         bleManager.listener = bleListener
         
@@ -234,20 +238,29 @@ class DeviceActivity : AppCompatActivity() {
         manager.openCamera(cameraId, cameraStateCallback, backgroundHandler)
     }
 
-    /** Prefer a size close to view aspect (phone-camera style), avoid forced config resolution. */
+    /** Prefer sensor aspect vs view aspect (phone-camera style). */
     private fun choosePreviewSize(choices: Array<Size>?): Size {
         if (choices.isNullOrEmpty()) return Size(1280, 720)
         val viewW = binding.cameraPreview.width.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
         val viewH = binding.cameraPreview.height.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels
-        val viewAspect = viewW.toFloat() / viewH.toFloat()
-        return choices
-            .filter { it.width <= 1920 && it.height <= 1080 }
-            .minByOrNull { size ->
-                val aspect = size.width.toFloat() / size.height.toFloat()
-                kotlin.math.abs(aspect - viewAspect)
-            } ?: choices[0]
+        val viewAspect = viewW.toFloat() / viewH.toFloat().coerceAtLeast(1f)
+        val candidates = choices.filter { it.width <= 1920 && it.height <= 1080 }.ifEmpty { choices.toList() }
+        return candidates.minByOrNull { size ->
+            val sensorAspect = size.width.toFloat() / size.height.toFloat()
+            val previewAspect = if (isPortraitDisplay()) 1f / sensorAspect else sensorAspect
+            kotlin.math.abs(previewAspect - viewAspect)
+        } ?: candidates[0]
     }
 
+    private fun isPortraitDisplay(): Boolean {
+        val rot = windowManager.defaultDisplay.rotation
+        return rot == Surface.ROTATION_0 || rot == Surface.ROTATION_180
+    }
+
+    /**
+     * Center-crop preview (phone camera style) — fills the frame without squashing.
+     * Based on Camera2Basic transform, applied for all rotations.
+     */
     private fun configureTransform(viewWidth: Int, viewHeight: Int) {
         val size = previewSize ?: return
         if (viewWidth == 0 || viewHeight == 0) return
@@ -257,16 +270,59 @@ class DeviceActivity : AppCompatActivity() {
         val bufferRect = RectF(0f, 0f, size.height.toFloat(), size.width.toFloat())
         val centerX = viewRect.centerX()
         val centerY = viewRect.centerY()
-        if (rotation == Surface.ROTATION_90 || rotation == Surface.ROTATION_270) {
-            bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
-            matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
-            val scale = maxOf(viewHeight.toFloat() / size.height, viewWidth.toFloat() / size.width)
-            matrix.postScale(scale, scale, centerX, centerY)
-            matrix.postRotate((90 * (rotation - 2)).toFloat(), centerX, centerY)
-        } else if (rotation == Surface.ROTATION_180) {
-            matrix.postRotate(180f, centerX, centerY)
+        bufferRect.offset(centerX - bufferRect.centerX(), centerY - bufferRect.centerY())
+        matrix.setRectToRect(viewRect, bufferRect, Matrix.ScaleToFit.FILL)
+        val scale = maxOf(
+            viewHeight.toFloat() / bufferRect.height(),
+            viewWidth.toFloat() / bufferRect.width(),
+        )
+        matrix.postScale(scale, scale, centerX, centerY)
+        when (rotation) {
+            Surface.ROTATION_90 -> matrix.postRotate(90f, centerX, centerY)
+            Surface.ROTATION_180 -> matrix.postRotate(180f, centerX, centerY)
+            Surface.ROTATION_270 -> matrix.postRotate(270f, centerX, centerY)
         }
         binding.cameraPreview.setTransform(matrix)
+    }
+
+    /** Write rotation metadata so portrait clips play as portrait (and landscape as landscape). */
+    private fun videoOrientationHint(): Int {
+        val cameraId = activeCameraId ?: return if (isPortraitDisplay()) 90 else 0
+        return try {
+            val manager = getSystemService(CAMERA_SERVICE) as CameraManager
+            val chars = manager.getCameraCharacteristics(cameraId)
+            val sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+            val deviceRotation = when (windowManager.defaultDisplay.rotation) {
+                Surface.ROTATION_0 -> 0
+                Surface.ROTATION_90 -> 90
+                Surface.ROTATION_180 -> 180
+                Surface.ROTATION_270 -> 270
+                else -> 0
+            }
+            val facing = chars.get(CameraCharacteristics.LENS_FACING)
+            if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
+                (sensorOrientation + deviceRotation) % 360
+            } else {
+                (sensorOrientation - deviceRotation + 360) % 360
+            }
+        } catch (_: Exception) {
+            if (isPortraitDisplay()) 90 else 0
+        }
+    }
+
+    private fun setRecordButtonUi(recording: Boolean) {
+        val density = resources.displayMetrics.density
+        val sizeDp = if (recording) 28f else 60f
+        val px = (sizeDp * density).toInt()
+        val lp = binding.recordBtnInner.layoutParams
+        lp.width = px
+        lp.height = px
+        binding.recordBtnInner.layoutParams = lp
+        binding.recordBtnInner.setBackgroundResource(
+            if (recording) R.drawable.bg_record_btn_inner_active
+            else R.drawable.bg_record_btn_inner,
+        )
+        binding.recordBtnLabel.text = getString(if (recording) R.string.stop else R.string.start)
     }
 
     private fun toggleFlash() {
@@ -416,6 +472,7 @@ class DeviceActivity : AppCompatActivity() {
                 setVideoSize(camProfile.videoFrameWidth, camProfile.videoFrameHeight)
                 setVideoFrameRate(camProfile.videoFrameRate)
                 setVideoEncodingBitRate(camProfile.videoBitRate)
+                setOrientationHint(videoOrientationHint())
                 setOutputFile(videoFile!!.absolutePath)
                 prepare()
             }
@@ -473,8 +530,7 @@ class DeviceActivity : AppCompatActivity() {
 
                         runOnUiThread {
                             isRecording = true
-                            binding.recordBtnInner.setBackgroundResource(R.drawable.bg_record_btn_inner_active)
-                            binding.recordBtnLabel.text = getString(R.string.stop)
+                            setRecordButtonUi(recording = true)
                         }
                     }
 
@@ -508,8 +564,7 @@ class DeviceActivity : AppCompatActivity() {
         TagSession.sessionBaseName = ""
         TagSession.recordingState = RecordingState.IDLE
         isRecording = false
-        binding.recordBtnInner.setBackgroundResource(R.drawable.bg_record_btn_inner)
-        binding.recordBtnLabel.text = getString(R.string.start)
+        setRecordButtonUi(recording = false)
         startPreview()
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
     }
@@ -517,8 +572,7 @@ class DeviceActivity : AppCompatActivity() {
     private fun stopRecording() {
         if (!isRecording) return
         isRecording = false
-        binding.recordBtnInner.setBackgroundResource(R.drawable.bg_record_btn_inner)
-        binding.recordBtnLabel.text = getString(R.string.start)
+        setRecordButtonUi(recording = false)
 
         // Stop BLE
         bleManager.stopRecording()

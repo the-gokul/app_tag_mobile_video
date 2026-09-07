@@ -45,13 +45,17 @@
         <activity
             android:name=".DeviceActivity"
             android:exported="false"
-            android:configChanges="orientation|screenSize|keyboardHidden" />
+            android:screenOrientation="locked"
+            android:configChanges="keyboardHidden|screenSize" />
         <activity android:name=".CustomDataActivity" android:exported="false" />
         <activity android:name=".SettingsActivity" android:exported="false" />
         <activity android:name=".LogViewerActivity" android:exported="false" />
         <activity android:name=".HistoryActivity" android:exported="false" />
         <activity android:name=".ProfileActivity" android:exported="false" />
-        <activity android:name=".AddProfileActivity" android:exported="false" />
+        <activity
+            android:name=".AddProfileActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustPan" />
 
         <provider
             android:name="androidx.core.content.FileProvider"
