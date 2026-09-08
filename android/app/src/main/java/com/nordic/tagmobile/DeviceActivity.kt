@@ -16,6 +16,7 @@ import android.media.MediaRecorder
 import android.os.Bundle
 import android.os.Handler
 import android.os.HandlerThread
+import android.os.SystemClock
 import android.util.Size
 import android.view.MenuItem
 import android.view.Surface
@@ -64,6 +65,17 @@ class DeviceActivity : AppCompatActivity() {
         override fun run() {
             updateTimestamp()
             timestampHandler?.postDelayed(this, 500)
+        }
+    }
+    private var recordStartedAtElapsed = 0L
+    private val durationRunnable = object : Runnable {
+        override fun run() {
+            if (!isRecording) return
+            val totalSec = ((SystemClock.elapsedRealtime() - recordStartedAtElapsed) / 1000L).toInt()
+            val mm = totalSec / 60
+            val ss = totalSec % 60
+            binding.recordDurationText.text = String.format(Locale.US, "%02d:%02d", mm, ss)
+            timestampHandler?.postDelayed(this, 200)
         }
     }
     private var previewSize: Size? = null
@@ -221,6 +233,7 @@ class DeviceActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         timestampHandler?.removeCallbacks(timestampRunnable)
+        timestampHandler?.removeCallbacks(durationRunnable)
         super.onDestroy()
     }
 
@@ -334,6 +347,17 @@ class DeviceActivity : AppCompatActivity() {
             else R.drawable.bg_record_btn_inner,
         )
         binding.recordBtnLabel.text = getString(if (recording) R.string.stop else R.string.start)
+        if (recording) {
+            recordStartedAtElapsed = SystemClock.elapsedRealtime()
+            binding.recordDurationText.text = "00:00"
+            binding.recordDurationText.visibility = View.VISIBLE
+            timestampHandler?.removeCallbacks(durationRunnable)
+            timestampHandler?.post(durationRunnable)
+        } else {
+            timestampHandler?.removeCallbacks(durationRunnable)
+            binding.recordDurationText.visibility = View.GONE
+            binding.recordDurationText.text = "00:00"
+        }
     }
 
     private fun toggleFlash() {
@@ -474,12 +498,11 @@ class DeviceActivity : AppCompatActivity() {
         }
 
         // Prepare MediaRecorder before BLE Start so a camera failure does not leave the Tag streaming.
-        // Bake device orientation into pixels (swap size for 90/270) so Gallery/Windows play upright
-        // without relying on MediaRecorder orientation metadata.
-        val orientationHint = videoOrientationHint()
+        // Portrait: encode HxW and bake sensor rotation into pixels (no orientation metadata).
+        val rotateCw = videoOrientationHint()
         val sensorW = camProfile.videoFrameWidth
         val sensorH = camProfile.videoFrameHeight
-        val portrait = orientationHint == 90 || orientationHint == 270
+        val portrait = rotateCw == 90 || rotateCw == 270
         val outW = if (portrait) sensorH else sensorW
         val outH = if (portrait) sensorW else sensorH
         val mr: MediaRecorder
@@ -505,7 +528,7 @@ class DeviceActivity : AppCompatActivity() {
         }
         mediaRecorder = mr
 
-        // Grafika encode path + FadCam timestamp: Camera → GL burn → MediaRecorder
+        // Camera → GL (rotate + timestamp) → MediaRecorder
         val burnSurface: Surface
         try {
             releaseLiveTimestampComposer()
@@ -513,7 +536,7 @@ class DeviceActivity : AppCompatActivity() {
                 outputSurface = mr.surface,
                 videoWidth = outW,
                 videoHeight = outH,
-                orientationHint = orientationHint,
+                rotateCwDegrees = rotateCw,
                 timestampText = { currentTimestamp() },
             )
             composer.start()

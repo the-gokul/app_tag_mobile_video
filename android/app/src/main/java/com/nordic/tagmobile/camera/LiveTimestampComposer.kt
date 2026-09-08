@@ -24,18 +24,18 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Grafika-style encode path + FadCam-style timestamp watermark:
- * Camera2 OES frame → OpenGL (camera + timestamp) → MediaRecorder surface.
+ * Camera2 → OpenGL (rotate + timestamp) → MediaRecorder.
  *
- * Orientation is baked into pixels: camera is rotated by [orientationHint] into a
- * display-sized buffer (portrait = swapped WxH). MediaRecorder orientationHint stays 0.
+ * Camera sensors deliver landscape buffers. For portrait we encode a portrait-sized
+ * frame and rotate the camera texture in UV space so pixels are upright. Timestamp
+ * is drawn last, upright, at the bottom. No MediaRecorder orientation metadata.
  */
 class LiveTimestampComposer(
     private val outputSurface: Surface,
     private val videoWidth: Int,
     private val videoHeight: Int,
-    /** Device/sensor rotation to bake into frames (0/90/180/270). */
-    private val orientationHint: Int,
+    /** Clockwise degrees to rotate sensor frames into display orientation (0/90/180/270). */
+    private val rotateCwDegrees: Int,
     private val timestampText: () -> String,
 ) : SurfaceTexture.OnFrameAvailableListener {
 
@@ -57,6 +57,7 @@ class LiveTimestampComposer(
     private var program = 0
     private var textProgram = 0
     private val stMatrix = FloatArray(16)
+    private val texMatrix = FloatArray(16)
     private var frameAvailable = false
 
     fun start() {
@@ -88,9 +89,7 @@ class LiveTimestampComposer(
     }
 
     fun release() {
-        if (!running.getAndSet(false)) {
-            // Still tear down if partially started
-        }
+        running.set(false)
         val h = handler
         if (h != null) {
             val done = CountDownLatch(1)
@@ -162,9 +161,9 @@ class LiveTimestampComposer(
         program = buildProgram(VERTEX_OES, FRAGMENT_OES)
         textProgram = buildProgram(VERTEX_TEX, FRAGMENT_TEX)
 
-        // Camera2 still delivers sensor-native (usually landscape) buffers.
-        val camW = if (orientationHint == 90 || orientationHint == 270) videoHeight else videoWidth
-        val camH = if (orientationHint == 90 || orientationHint == 270) videoWidth else videoHeight
+        // Sensor-native buffer (landscape for 90/270 encode sizes).
+        val camW = if (rotateCwDegrees == 90 || rotateCwDegrees == 270) videoHeight else videoWidth
+        val camH = if (rotateCwDegrees == 90 || rotateCwDegrees == 270) videoWidth else videoHeight
         val st = SurfaceTexture(oesTexId)
         st.setDefaultBufferSize(camW, camH)
         st.setOnFrameAvailableListener(this)
@@ -184,24 +183,18 @@ class LiveTimestampComposer(
 
         st.updateTexImage()
         st.getTransformMatrix(stMatrix)
+        buildTexMatrix(texMatrix, stMatrix, rotateCwDegrees)
 
         GLES20.glViewport(0, 0, videoWidth, videoHeight)
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-        // 1) Full-frame camera (OES), rotated into display orientation.
-        // orientationHint is clockwise (MediaRecorder convention); GL rotateM is CCW.
-        val camMvp = FloatArray(16)
-        Matrix.setIdentityM(camMvp, 0)
-        if (orientationHint != 0) {
-            Matrix.rotateM(camMvp, 0, -orientationHint.toFloat(), 0f, 0f, 1f)
-        }
+        // 1) Camera — full viewport, orientation baked via texMatrix
         GLES20.glUseProgram(program)
         val aPos = GLES20.glGetAttribLocation(program, "aPosition")
         val aTex = GLES20.glGetAttribLocation(program, "aTexCoord")
         val uTex = GLES20.glGetUniformLocation(program, "uTexture")
-        val uMat = GLES20.glGetUniformLocation(program, "uSTMatrix")
-        val uMvp = GLES20.glGetUniformLocation(program, "uMVP")
+        val uMat = GLES20.glGetUniformLocation(program, "uTexMatrix")
         FULL_QUAD.position(0)
         GLES20.glVertexAttribPointer(aPos, 2, GLES20.GL_FLOAT, false, 16, FULL_QUAD)
         GLES20.glEnableVertexAttribArray(aPos)
@@ -211,15 +204,14 @@ class LiveTimestampComposer(
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId)
         GLES20.glUniform1i(uTex, 0)
-        GLES20.glUniformMatrix4fv(uMat, 1, false, stMatrix, 0)
-        GLES20.glUniformMatrix4fv(uMvp, 1, false, camMvp, 0)
+        GLES20.glUniformMatrix4fv(uMat, 1, false, texMatrix, 0)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
-        // 2) Timestamp watermark — buffer is already display-oriented, so bottom-center upright
+        // 2) Timestamp — upright at bottom of already-oriented buffer
         val label = timestampText()
         val bmp = renderTimestampBitmap(label)
         uploadBitmap(textTexId, bmp)
-        val (mvp, quad) = overlayQuadBottom(bmp.width, bmp.height)
+        val mvp = overlayMvp(bmp.width, bmp.height)
         GLES20.glEnable(GLES20.GL_BLEND)
         GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
         GLES20.glUseProgram(textProgram)
@@ -227,11 +219,11 @@ class LiveTimestampComposer(
         val tt = GLES20.glGetAttribLocation(textProgram, "aTexCoord")
         val tu = GLES20.glGetUniformLocation(textProgram, "uTexture")
         val tm = GLES20.glGetUniformLocation(textProgram, "uMVP")
-        quad.position(0)
-        GLES20.glVertexAttribPointer(tp, 2, GLES20.GL_FLOAT, false, 16, quad)
+        UNIT_QUAD.position(0)
+        GLES20.glVertexAttribPointer(tp, 2, GLES20.GL_FLOAT, false, 16, UNIT_QUAD)
         GLES20.glEnableVertexAttribArray(tp)
-        quad.position(2)
-        GLES20.glVertexAttribPointer(tt, 2, GLES20.GL_FLOAT, false, 16, quad)
+        UNIT_QUAD.position(2)
+        GLES20.glVertexAttribPointer(tt, 2, GLES20.GL_FLOAT, false, 16, UNIT_QUAD)
         GLES20.glEnableVertexAttribArray(tt)
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textTexId)
@@ -245,17 +237,33 @@ class LiveTimestampComposer(
         EGL14.eglSwapBuffers(eglDisplay, eglSurface)
     }
 
-    /** Stamp at bottom-center of the already-oriented encode buffer. */
-    private fun overlayQuadBottom(bw: Int, bh: Int): Pair<FloatArray, FloatBuffer> {
+    /**
+     * texMatrix = stMatrix × rotateAroundCenter(cwDegrees).
+     * Rotates the camera image clockwise in UV space before SurfaceTexture's fix-up.
+     */
+    private fun buildTexMatrix(out: FloatArray, st: FloatArray, cwDegrees: Int) {
+        if (cwDegrees % 360 == 0) {
+            System.arraycopy(st, 0, out, 0, 16)
+            return
+        }
+        val rot = FloatArray(16)
+        Matrix.setIdentityM(rot, 0)
+        Matrix.translateM(rot, 0, 0.5f, 0.5f, 0f)
+        // GL rotateM is CCW → negate for clockwise bake
+        Matrix.rotateM(rot, 0, -cwDegrees.toFloat(), 0f, 0f, 1f)
+        Matrix.translateM(rot, 0, -0.5f, -0.5f, 0f)
+        Matrix.multiplyMM(out, 0, st, 0, rot, 0)
+    }
+
+    private fun overlayMvp(bw: Int, bh: Int): FloatArray {
         val mvp = FloatArray(16)
         Matrix.setIdentityM(mvp, 0)
         val scaleX = (bw.toFloat() / videoWidth) * 2f
         val scaleY = (bh.toFloat() / videoHeight) * 2f
-        // ~camera UI: above Start controls
         val margin = 0.30f
         Matrix.translateM(mvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
         Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
-        return mvp to UNIT_QUAD
+        return mvp
     }
 
     private fun renderTimestampBitmap(text: String): Bitmap {
@@ -394,7 +402,6 @@ class LiveTimestampComposer(
                 .put(data)
                 .also { it.position(0) }
 
-        // x,y,u,v — full NDC quad
         private val FULL_QUAD = floatBuffer(
             floatArrayOf(
                 -1f, -1f, 0f, 0f,
@@ -415,12 +422,11 @@ class LiveTimestampComposer(
         private const val VERTEX_OES = """
             attribute vec4 aPosition;
             attribute vec2 aTexCoord;
-            uniform mat4 uSTMatrix;
-            uniform mat4 uMVP;
+            uniform mat4 uTexMatrix;
             varying vec2 vTexCoord;
             void main() {
-              gl_Position = uMVP * aPosition;
-              vTexCoord = (uSTMatrix * vec4(aTexCoord, 0.0, 1.0)).xy;
+              gl_Position = aPosition;
+              vTexCoord = (uTexMatrix * vec4(aTexCoord.xy, 0.0, 1.0)).xy;
             }
         """
         private const val FRAGMENT_OES = """
