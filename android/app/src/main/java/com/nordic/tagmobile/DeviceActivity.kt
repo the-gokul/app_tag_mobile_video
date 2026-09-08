@@ -28,7 +28,6 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.nordic.tagmobile.analysis.SessionAnalyzer
 import com.nordic.tagmobile.ble.TagBleManager
-import com.nordic.tagmobile.camera.LiveTimestampComposer
 import com.nordic.tagmobile.databinding.ActivityDeviceBinding
 import com.nordic.tagmobile.log.LogCategory
 import com.nordic.tagmobile.log.TagLogger
@@ -51,7 +50,6 @@ class DeviceActivity : AppCompatActivity() {
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var mediaRecorder: MediaRecorder? = null
-    private var liveTimestampComposer: LiveTimestampComposer? = null
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
     private var videoFile: File? = null
@@ -146,7 +144,6 @@ class DeviceActivity : AppCompatActivity() {
                         mediaRecorder?.stop()
                     } catch (_: Exception) {
                     }
-                    releaseLiveTimestampComposer()
                     try {
                         mediaRecorder?.release()
                     } catch (_: Exception) {
@@ -352,7 +349,6 @@ class DeviceActivity : AppCompatActivity() {
     private fun closeCamera() {
         captureSession?.close(); captureSession = null
         cameraDevice?.close(); cameraDevice = null
-        releaseLiveTimestampComposer()
         mediaRecorder?.release(); mediaRecorder = null
     }
 
@@ -474,7 +470,6 @@ class DeviceActivity : AppCompatActivity() {
         }
 
         // Prepare MediaRecorder before BLE Start so a camera failure does not leave the Tag streaming
-        val orientationHint = videoOrientationHint()
         val mr: MediaRecorder
         try {
             @Suppress("DEPRECATION")
@@ -485,7 +480,7 @@ class DeviceActivity : AppCompatActivity() {
                 setVideoSize(camProfile.videoFrameWidth, camProfile.videoFrameHeight)
                 setVideoFrameRate(camProfile.videoFrameRate)
                 setVideoEncodingBitRate(camProfile.videoBitRate)
-                setOrientationHint(orientationHint)
+                setOrientationHint(videoOrientationHint())
                 setOutputFile(videoFile!!.absolutePath)
                 prepare()
             }
@@ -498,32 +493,12 @@ class DeviceActivity : AppCompatActivity() {
         }
         mediaRecorder = mr
 
-        // Live OpenGL burn into MediaRecorder (no post-Stop Media3 wait)
-        val burnSurface: Surface
-        try {
-            releaseLiveTimestampComposer()
-            val composer = LiveTimestampComposer(
-                outputSurface = mr.surface,
-                videoWidth = camProfile.videoFrameWidth,
-                videoHeight = camProfile.videoFrameHeight,
-                orientationHint = orientationHint,
-                timestampText = { currentTimestamp() },
-            )
-            composer.start()
-            burnSurface = composer.cameraInputSurface
-                ?: throw IllegalStateException("Live timestamp input surface missing")
-            liveTimestampComposer = composer
-        } catch (e: Exception) {
-            TagLogger.log(LogCategory.ERRORS, "LIVE_TIMESTAMP_ERR", e.message ?: "")
-            abortStartAfterCameraFail("Live timestamp failed: ${e.message}")
-            return
-        }
-
         val previewSurface = Surface(texture)
+        val recorderSurface = mr.surface
         val request = try {
             camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(previewSurface)
-                addTarget(burnSurface)
+                addTarget(recorderSurface)
                 set(
                     CaptureRequest.FLASH_MODE,
                     if (isFlashOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF,
@@ -537,7 +512,7 @@ class DeviceActivity : AppCompatActivity() {
         captureSession?.close()
         try {
             camera.createCaptureSession(
-                listOf(previewSurface, burnSurface),
+                listOf(previewSurface, recorderSurface),
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
                         captureSession = session
@@ -580,14 +555,6 @@ class DeviceActivity : AppCompatActivity() {
         }
     }
 
-    private fun releaseLiveTimestampComposer() {
-        try {
-            liveTimestampComposer?.release()
-        } catch (_: Exception) {
-        }
-        liveTimestampComposer = null
-    }
-
     /** Release recorder / partial video file when Start fails before BLE is running. */
     private fun abortStartAfterCameraFail(message: String) {
         TagLogger.log(LogCategory.ERRORS, "VIDEO_START_ABORT", message)
@@ -595,7 +562,6 @@ class DeviceActivity : AppCompatActivity() {
             mediaRecorder?.reset()
         } catch (_: Exception) {
         }
-        releaseLiveTimestampComposer()
         try {
             mediaRecorder?.release()
         } catch (_: Exception) {
@@ -620,14 +586,13 @@ class DeviceActivity : AppCompatActivity() {
         bleManager.stopRecording()
         TagLogger.log(LogCategory.CONTROL, "STOP", deviceLabel())
 
-        // Stop video (timestamp already burned live into frames)
+        // Stop video
         try {
             captureSession?.stopRepeating()
             mediaRecorder?.stop()
         } catch (e: Exception) {
             TagLogger.log(LogCategory.ERRORS, "VIDEO_STOP_ERR", e.message ?: "")
         }
-        releaseLiveTimestampComposer()
         mediaRecorder?.release(); mediaRecorder = null
         TagLogger.log(LogCategory.FILE, "VIDEO_SAVED", videoFile?.name ?: "")
 

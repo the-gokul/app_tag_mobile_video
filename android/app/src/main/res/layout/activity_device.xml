@@ -106,12 +106,14 @@
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:layout_marginBottom="24dp"
-                android:padding="6dp"
-                android:paddingHorizontal="10dp"
-                android:background="#8C000000"
-                android:textColor="#FFFFFF"
+                android:background="@android:color/transparent"
+                android:textColor="#CCFFFFFF"
                 android:textSize="14sp"
                 android:fontFamily="monospace"
+                android:shadowColor="#80000000"
+                android:shadowDx="1"
+                android:shadowDy="1"
+                android:shadowRadius="3"
                 android:text="00-00-0000 00:00:00:000" />
 
             <!-- Last video thumb (left) + record control (center), like phone camera -->
