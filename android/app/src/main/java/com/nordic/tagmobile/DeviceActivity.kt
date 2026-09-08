@@ -28,7 +28,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.nordic.tagmobile.analysis.SessionAnalyzer
 import com.nordic.tagmobile.ble.TagBleManager
-import com.nordic.tagmobile.camera.TimestampBurnOverlay
+import com.nordic.tagmobile.camera.LiveTimestampComposer
 import com.nordic.tagmobile.databinding.ActivityDeviceBinding
 import com.nordic.tagmobile.log.LogCategory
 import com.nordic.tagmobile.log.TagLogger
@@ -51,7 +51,7 @@ class DeviceActivity : AppCompatActivity() {
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var mediaRecorder: MediaRecorder? = null
-    private var timestampBurnOverlay: TimestampBurnOverlay? = null
+    private var liveTimestampComposer: LiveTimestampComposer? = null
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
     private var videoFile: File? = null
@@ -146,7 +146,7 @@ class DeviceActivity : AppCompatActivity() {
                         mediaRecorder?.stop()
                     } catch (_: Exception) {
                     }
-                    releaseTimestampBurnOverlay()
+                    releaseLiveTimestampComposer()
                     try {
                         mediaRecorder?.release()
                     } catch (_: Exception) {
@@ -352,7 +352,7 @@ class DeviceActivity : AppCompatActivity() {
     private fun closeCamera() {
         captureSession?.close(); captureSession = null
         cameraDevice?.close(); cameraDevice = null
-        releaseTimestampBurnOverlay()
+        releaseLiveTimestampComposer()
         mediaRecorder?.release(); mediaRecorder = null
     }
 
@@ -501,21 +501,21 @@ class DeviceActivity : AppCompatActivity() {
         // Live OpenGL burn into MediaRecorder (no post-Stop Media3 wait)
         val burnSurface: Surface
         try {
-            releaseTimestampBurnOverlay()
-            val overlay = TimestampBurnOverlay(
+            releaseLiveTimestampComposer()
+            val composer = LiveTimestampComposer(
                 outputSurface = mr.surface,
                 videoWidth = camProfile.videoFrameWidth,
                 videoHeight = camProfile.videoFrameHeight,
                 orientationHint = orientationHint,
                 timestampText = { currentTimestamp() },
             )
-            overlay.start()
-            burnSurface = overlay.cameraInputSurface
-                ?: throw IllegalStateException("Overlay input surface missing")
-            timestampBurnOverlay = overlay
+            composer.start()
+            burnSurface = composer.cameraInputSurface
+                ?: throw IllegalStateException("Live timestamp input surface missing")
+            liveTimestampComposer = composer
         } catch (e: Exception) {
-            TagLogger.log(LogCategory.ERRORS, "TIMESTAMP_OVERLAY_ERR", e.message ?: "")
-            abortStartAfterCameraFail("Timestamp overlay failed: ${e.message}")
+            TagLogger.log(LogCategory.ERRORS, "LIVE_TIMESTAMP_ERR", e.message ?: "")
+            abortStartAfterCameraFail("Live timestamp failed: ${e.message}")
             return
         }
 
@@ -580,12 +580,12 @@ class DeviceActivity : AppCompatActivity() {
         }
     }
 
-    private fun releaseTimestampBurnOverlay() {
+    private fun releaseLiveTimestampComposer() {
         try {
-            timestampBurnOverlay?.release()
+            liveTimestampComposer?.release()
         } catch (_: Exception) {
         }
-        timestampBurnOverlay = null
+        liveTimestampComposer = null
     }
 
     /** Release recorder / partial video file when Start fails before BLE is running. */
@@ -595,7 +595,7 @@ class DeviceActivity : AppCompatActivity() {
             mediaRecorder?.reset()
         } catch (_: Exception) {
         }
-        releaseTimestampBurnOverlay()
+        releaseLiveTimestampComposer()
         try {
             mediaRecorder?.release()
         } catch (_: Exception) {
@@ -627,7 +627,7 @@ class DeviceActivity : AppCompatActivity() {
         } catch (e: Exception) {
             TagLogger.log(LogCategory.ERRORS, "VIDEO_STOP_ERR", e.message ?: "")
         }
-        releaseTimestampBurnOverlay()
+        releaseLiveTimestampComposer()
         mediaRecorder?.release(); mediaRecorder = null
         TagLogger.log(LogCategory.FILE, "VIDEO_SAVED", videoFile?.name ?: "")
 

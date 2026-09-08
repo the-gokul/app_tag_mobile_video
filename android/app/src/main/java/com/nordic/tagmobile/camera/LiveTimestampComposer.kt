@@ -22,10 +22,10 @@ import java.nio.FloatBuffer
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Camera frames → OpenGL → MediaRecorder, burning a UI-matching timestamp overlay
- * into the encoded video. Does not change MediaRecorder size/bitrate settings.
+ * Live OpenGL compositor: Camera2 OES frames to timestamp overlay to MediaRecorder.
+ * Burns UI-matching timestamp into encoded video during recording (no post-Stop re-encode).
  */
-class TimestampBurnOverlay(
+class LiveTimestampComposer(
     private val outputSurface: Surface,
     private val videoWidth: Int,
     private val videoHeight: Int,
@@ -56,7 +56,7 @@ class TimestampBurnOverlay(
 
     fun start() {
         if (running.getAndSet(true)) return
-        val t = HandlerThread("TimestampBurnOverlay").also { it.start() }
+        val t = HandlerThread("LiveTimestampComposer").also { it.start() }
         thread = t
         val h = Handler(t.looper)
         handler = h
@@ -229,7 +229,7 @@ class TimestampBurnOverlay(
 
         when (orientationHint) {
             90 -> {
-                // After 90° CW display rotation, buffer left edge becomes bottom
+                // After 90deg CW display rotation, buffer left edge becomes bottom
                 Matrix.translateM(mvp, 0, -1f + margin + scaleY / 2f, 0f, 0f)
                 Matrix.rotateM(mvp, 0, 90f, 0f, 0f, 1f)
                 Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
