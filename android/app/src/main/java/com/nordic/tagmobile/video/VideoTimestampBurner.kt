@@ -2,7 +2,6 @@ package com.nordic.tagmobile.video
 
 import android.content.Context
 import android.graphics.Color
-import android.graphics.Typeface
 import android.net.Uri
 import android.os.Handler
 import android.os.Looper
@@ -10,7 +9,7 @@ import android.text.SpannableString
 import android.text.style.AbsoluteSizeSpan
 import android.text.style.BackgroundColorSpan
 import android.text.style.ForegroundColorSpan
-import android.text.style.StyleSpan
+import android.text.style.TypefaceSpan
 import androidx.media3.common.MediaItem
 import androidx.media3.common.MimeTypes
 import androidx.media3.common.util.UnstableApi
@@ -43,6 +42,7 @@ import java.util.concurrent.atomic.AtomicReference
 @UnstableApi
 object VideoTimestampBurner {
 
+    // Same format as DeviceActivity / activity_device.xml timestampText
     private val fmt = SimpleDateFormat("dd-MM-yyyy HH:mm:ss:SSS", Locale.US)
 
     /**
@@ -70,24 +70,23 @@ object VideoTimestampBurner {
             override fun getText(presentationTimeUs: Long): SpannableString {
                 val wallMs = baseMs + presentationTimeUs / 1000L
                 val label = fmt.format(Date(wallMs))
+                // Match activity_device.xml timestampText: white, monospace 14sp, #8C000000 bg
                 return SpannableString(label).apply {
-                    setSpan(ForegroundColorSpan(Color.WHITE), 0, length, SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    setSpan(AbsoluteSizeSpan(22, true), 0, length, SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    setSpan(StyleSpan(Typeface.BOLD), 0, length, SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE)
-                    setSpan(
-                        BackgroundColorSpan(0x8C000000.toInt()),
-                        0,
-                        length,
-                        SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE,
-                    )
+                    val flags = SpannableString.SPAN_EXCLUSIVE_EXCLUSIVE
+                    setSpan(ForegroundColorSpan(Color.WHITE), 0, length, flags)
+                    setSpan(AbsoluteSizeSpan(14, /* dip= */ true), 0, length, flags)
+                    setSpan(TypefaceSpan("monospace"), 0, length, flags)
+                    setSpan(BackgroundColorSpan(0x8C000000.toInt()), 0, length, flags)
                 }
             }
 
             override fun getOverlaySettings(presentationTimeUs: Long): OverlaySettings =
+                // Media3 NDC: (-1,-1)=bottom-left, (1,1)=top-right.
+                // Camera UI places timestamp bottom-center above the Start button.
                 OverlaySettings.Builder()
-                    .setBackgroundFrameAnchor(0f, 0.72f)
+                    .setBackgroundFrameAnchor(0f, -0.42f)
                     .setOverlayFrameAnchor(0f, 0f)
-                    .setScale(0.55f, 0.55f)
+                    .setScale(2.4f, 2.4f)
                     .build()
         }
 
