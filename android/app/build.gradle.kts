@@ -65,9 +65,4 @@ dependencies {
     // Nordic BLE stack (Maven — no Toolbox clone)
     implementation("no.nordicsemi.android:ble-ktx:2.9.0")
     implementation("no.nordicsemi.android.support.v18:scanner:1.6.0")
-
-    // Burn timestamp watermark into recorded MP4
-    implementation("androidx.media3:media3-transformer:1.4.1")
-    implementation("androidx.media3:media3-effect:1.4.1")
-    implementation("androidx.media3:media3-common:1.4.1")
 }

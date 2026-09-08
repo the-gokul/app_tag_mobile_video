@@ -224,8 +224,8 @@ class TimestampBurnOverlay(
         // Normalize overlay size relative to video buffer
         val scaleX = (bw.toFloat() / videoWidth) * 2f
         val scaleY = (bh.toFloat() / videoHeight) * 2f
-        // NDC: bottom margin similar to UI (~12% from bottom)
-        val margin = 0.18f
+        // NDC: above bottom controls (~camera UI timestamp above Start)
+        val margin = 0.28f
 
         when (orientationHint) {
             90 -> {
@@ -253,14 +253,17 @@ class TimestampBurnOverlay(
     }
 
     private fun renderTimestampBitmap(text: String): Bitmap {
+        // Scale like on-screen 14sp monospace relative to video short side
+        val shortSide = minOf(videoWidth, videoHeight).toFloat()
+        val textSizePx = (shortSide * 0.042f).coerceIn(34f, 64f)
         val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
-            textSize = 36f
+            textSize = textSizePx
             typeface = Typeface.MONOSPACE
             textAlign = Paint.Align.LEFT
         }
-        val padX = 20f
-        val padY = 12f
+        val padX = textSizePx * 0.45f
+        val padY = textSizePx * 0.28f
         val w = (textPaint.measureText(text) + padX * 2).toInt().coerceAtLeast(8)
         val fm = textPaint.fontMetrics
         val h = (fm.descent - fm.ascent + padY * 2).toInt().coerceAtLeast(8)

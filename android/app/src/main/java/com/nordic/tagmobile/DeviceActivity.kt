@@ -26,9 +26,9 @@ import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
-import androidx.media3.common.util.UnstableApi
 import com.nordic.tagmobile.analysis.SessionAnalyzer
 import com.nordic.tagmobile.ble.TagBleManager
+import com.nordic.tagmobile.camera.TimestampBurnOverlay
 import com.nordic.tagmobile.databinding.ActivityDeviceBinding
 import com.nordic.tagmobile.log.LogCategory
 import com.nordic.tagmobile.log.TagLogger
@@ -38,12 +38,10 @@ import com.nordic.tagmobile.protocol.SensorPacketParser.HEADER_SIZE
 import com.nordic.tagmobile.protocol.XlsxExporter
 import com.nordic.tagmobile.storage.GalleryPublisher
 import com.nordic.tagmobile.storage.RecordingStore
-import com.nordic.tagmobile.video.VideoTimestampBurner
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
 
-@OptIn(UnstableApi::class)
 class DeviceActivity : AppCompatActivity() {
 
     private lateinit var binding: ActivityDeviceBinding
@@ -53,6 +51,7 @@ class DeviceActivity : AppCompatActivity() {
     private var cameraDevice: CameraDevice? = null
     private var captureSession: CameraCaptureSession? = null
     private var mediaRecorder: MediaRecorder? = null
+    private var timestampBurnOverlay: TimestampBurnOverlay? = null
     private var backgroundThread: HandlerThread? = null
     private var backgroundHandler: Handler? = null
     private var videoFile: File? = null
@@ -147,6 +146,7 @@ class DeviceActivity : AppCompatActivity() {
                         mediaRecorder?.stop()
                     } catch (_: Exception) {
                     }
+                    releaseTimestampBurnOverlay()
                     try {
                         mediaRecorder?.release()
                     } catch (_: Exception) {
@@ -352,6 +352,7 @@ class DeviceActivity : AppCompatActivity() {
     private fun closeCamera() {
         captureSession?.close(); captureSession = null
         cameraDevice?.close(); cameraDevice = null
+        releaseTimestampBurnOverlay()
         mediaRecorder?.release(); mediaRecorder = null
     }
 
@@ -473,6 +474,7 @@ class DeviceActivity : AppCompatActivity() {
         }
 
         // Prepare MediaRecorder before BLE Start so a camera failure does not leave the Tag streaming
+        val orientationHint = videoOrientationHint()
         val mr: MediaRecorder
         try {
             @Suppress("DEPRECATION")
@@ -483,7 +485,7 @@ class DeviceActivity : AppCompatActivity() {
                 setVideoSize(camProfile.videoFrameWidth, camProfile.videoFrameHeight)
                 setVideoFrameRate(camProfile.videoFrameRate)
                 setVideoEncodingBitRate(camProfile.videoBitRate)
-                setOrientationHint(videoOrientationHint())
+                setOrientationHint(orientationHint)
                 setOutputFile(videoFile!!.absolutePath)
                 prepare()
             }
@@ -496,12 +498,32 @@ class DeviceActivity : AppCompatActivity() {
         }
         mediaRecorder = mr
 
+        // Live OpenGL burn into MediaRecorder (no post-Stop Media3 wait)
+        val burnSurface: Surface
+        try {
+            releaseTimestampBurnOverlay()
+            val overlay = TimestampBurnOverlay(
+                outputSurface = mr.surface,
+                videoWidth = camProfile.videoFrameWidth,
+                videoHeight = camProfile.videoFrameHeight,
+                orientationHint = orientationHint,
+                timestampText = { currentTimestamp() },
+            )
+            overlay.start()
+            burnSurface = overlay.cameraInputSurface
+                ?: throw IllegalStateException("Overlay input surface missing")
+            timestampBurnOverlay = overlay
+        } catch (e: Exception) {
+            TagLogger.log(LogCategory.ERRORS, "TIMESTAMP_OVERLAY_ERR", e.message ?: "")
+            abortStartAfterCameraFail("Timestamp overlay failed: ${e.message}")
+            return
+        }
+
         val previewSurface = Surface(texture)
-        val recorderSurface = mr.surface
         val request = try {
             camera.createCaptureRequest(CameraDevice.TEMPLATE_RECORD).apply {
                 addTarget(previewSurface)
-                addTarget(recorderSurface)
+                addTarget(burnSurface)
                 set(
                     CaptureRequest.FLASH_MODE,
                     if (isFlashOn) CaptureRequest.FLASH_MODE_TORCH else CaptureRequest.FLASH_MODE_OFF,
@@ -515,7 +537,7 @@ class DeviceActivity : AppCompatActivity() {
         captureSession?.close()
         try {
             camera.createCaptureSession(
-                listOf(previewSurface, recorderSurface),
+                listOf(previewSurface, burnSurface),
                 object : CameraCaptureSession.StateCallback() {
                     override fun onConfigured(session: CameraCaptureSession) {
                         captureSession = session
@@ -558,6 +580,14 @@ class DeviceActivity : AppCompatActivity() {
         }
     }
 
+    private fun releaseTimestampBurnOverlay() {
+        try {
+            timestampBurnOverlay?.release()
+        } catch (_: Exception) {
+        }
+        timestampBurnOverlay = null
+    }
+
     /** Release recorder / partial video file when Start fails before BLE is running. */
     private fun abortStartAfterCameraFail(message: String) {
         TagLogger.log(LogCategory.ERRORS, "VIDEO_START_ABORT", message)
@@ -565,6 +595,7 @@ class DeviceActivity : AppCompatActivity() {
             mediaRecorder?.reset()
         } catch (_: Exception) {
         }
+        releaseTimestampBurnOverlay()
         try {
             mediaRecorder?.release()
         } catch (_: Exception) {
@@ -589,13 +620,14 @@ class DeviceActivity : AppCompatActivity() {
         bleManager.stopRecording()
         TagLogger.log(LogCategory.CONTROL, "STOP", deviceLabel())
 
-        // Stop video
+        // Stop video (timestamp already burned live into frames)
         try {
             captureSession?.stopRepeating()
             mediaRecorder?.stop()
         } catch (e: Exception) {
             TagLogger.log(LogCategory.ERRORS, "VIDEO_STOP_ERR", e.message ?: "")
         }
+        releaseTimestampBurnOverlay()
         mediaRecorder?.release(); mediaRecorder = null
         TagLogger.log(LogCategory.FILE, "VIDEO_SAVED", videoFile?.name ?: "")
 
@@ -682,21 +714,9 @@ class DeviceActivity : AppCompatActivity() {
             TagSession.recordingState = RecordingState.RECEIVED
             Toast.makeText(this, "Saved ${entry.baseName}\nVideo: $vSize", Toast.LENGTH_LONG).show()
 
-            // #1 burn timestamp into MP4, then publish burned file to Gallery
+            // Timestamp already in file — only publish to Gallery (fast copy)
             if (recordedVideo != null && recordedVideo.exists()) {
-                Toast.makeText(this, R.string.burning_timestamp, Toast.LENGTH_SHORT).show()
                 Thread {
-                    val burnBase = syncBase.takeIf { it > 0L } ?: System.currentTimeMillis()
-                    val burned = try {
-                        VideoTimestampBurner.burnInPlace(
-                            context = applicationContext,
-                            videoFile = recordedVideo,
-                            syncBaseUnixMs = burnBase,
-                        )
-                    } catch (e: Exception) {
-                        TagLogger.log(LogCategory.ERRORS, "TIMESTAMP_BURN_FAIL", e.message ?: "")
-                        false
-                    }
                     val galleryUri = GalleryPublisher.publishVideo(
                         applicationContext,
                         recordedVideo,
@@ -710,15 +730,7 @@ class DeviceActivity : AppCompatActivity() {
                         TagSession.lastHistoryEntry =
                             TagSession.lastHistoryEntry?.copy(galleryUri = galleryUri.toString())
                     }
-                    runOnUiThread {
-                        refreshLastVideoThumb()
-                        val msg = if (burned) {
-                            getString(R.string.timestamp_burn_ok)
-                        } else {
-                            getString(R.string.timestamp_burn_skip)
-                        }
-                        Toast.makeText(this, msg, Toast.LENGTH_SHORT).show()
-                    }
+                    runOnUiThread { refreshLastVideoThumb() }
                 }.start()
             }
         } catch (e: Exception) {
