@@ -296,7 +296,7 @@ class DeviceActivity : AppCompatActivity() {
         binding.cameraPreview.setTransform(matrix)
     }
 
-    /** Write rotation metadata so portrait clips play as portrait (and landscape as landscape). */
+    /** Sensor/device rotation used to bake upright pixels (0/90/180/270 clockwise). */
     private fun videoOrientationHint(): Int {
         val cameraId = activeCameraId ?: return if (isPortraitDisplay()) 90 else 0
         return try {
@@ -473,8 +473,15 @@ class DeviceActivity : AppCompatActivity() {
             CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH)
         }
 
-        // Prepare MediaRecorder before BLE Start so a camera failure does not leave the Tag streaming
+        // Prepare MediaRecorder before BLE Start so a camera failure does not leave the Tag streaming.
+        // Bake device orientation into pixels (swap size for 90/270) so Gallery/Windows play upright
+        // without relying on MediaRecorder orientation metadata.
         val orientationHint = videoOrientationHint()
+        val sensorW = camProfile.videoFrameWidth
+        val sensorH = camProfile.videoFrameHeight
+        val portrait = orientationHint == 90 || orientationHint == 270
+        val outW = if (portrait) sensorH else sensorW
+        val outH = if (portrait) sensorW else sensorH
         val mr: MediaRecorder
         try {
             @Suppress("DEPRECATION")
@@ -482,10 +489,10 @@ class DeviceActivity : AppCompatActivity() {
                 setVideoSource(MediaRecorder.VideoSource.SURFACE)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
                 setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-                setVideoSize(camProfile.videoFrameWidth, camProfile.videoFrameHeight)
+                setVideoSize(outW, outH)
                 setVideoFrameRate(camProfile.videoFrameRate)
                 setVideoEncodingBitRate(camProfile.videoBitRate)
-                setOrientationHint(orientationHint)
+                setOrientationHint(0)
                 setOutputFile(videoFile!!.absolutePath)
                 prepare()
             }
@@ -504,8 +511,8 @@ class DeviceActivity : AppCompatActivity() {
             releaseLiveTimestampComposer()
             val composer = LiveTimestampComposer(
                 outputSurface = mr.surface,
-                videoWidth = camProfile.videoFrameWidth,
-                videoHeight = camProfile.videoFrameHeight,
+                videoWidth = outW,
+                videoHeight = outH,
                 orientationHint = orientationHint,
                 timestampText = { currentTimestamp() },
             )
