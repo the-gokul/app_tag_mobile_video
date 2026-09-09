@@ -181,16 +181,8 @@ class LiveTimestampComposer(
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-        // 1) Camera — rotate the quad to correct for sensor vs orientationHint
-        //    The sensor is landscape; orientationHint tells the player to rotate CW.
-        //    We counter-rotate the quad the same amount so frames are upright in the buffer.
+        // 1) Camera — draw the quad exactly as mapped by SurfaceTexture to avoid squishing
         Matrix.setIdentityM(rotMatrix, 0)
-        when (orientationHint) {
-            90  -> Matrix.rotateM(rotMatrix, 0, 90f,  0f, 0f, 1f)
-            180 -> Matrix.rotateM(rotMatrix, 0, 180f, 0f, 0f, 1f)
-            270 -> Matrix.rotateM(rotMatrix, 0, -90f, 0f, 0f, 1f)
-            // 0 or unknown: no rotation needed
-        }
         GLES20.glUseProgram(program)
         val aPos = GLES20.glGetAttribLocation(program, "aPosition")
         val aTex = GLES20.glGetAttribLocation(program, "aTexCoord")
