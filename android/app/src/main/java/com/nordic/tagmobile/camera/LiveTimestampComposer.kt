@@ -59,6 +59,7 @@ class LiveTimestampComposer(
     private var program = 0
     private var textProgram = 0
     private val stMatrix = FloatArray(16)
+    private val rotMatrix = FloatArray(16)
     private var frameAvailable = false
 
     fun start() {
@@ -180,12 +181,22 @@ class LiveTimestampComposer(
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-        // 1) Camera — SurfaceTexture matrix only (sensor frames as produced)
+        // 1) Camera — rotate the quad to correct for sensor vs orientationHint
+        //    The sensor is landscape; orientationHint tells the player to rotate CW.
+        //    We counter-rotate the quad the same amount so frames are upright in the buffer.
+        Matrix.setIdentityM(rotMatrix, 0)
+        when (orientationHint) {
+            90  -> Matrix.rotateM(rotMatrix, 0, -90f, 0f, 0f, 1f)
+            180 -> Matrix.rotateM(rotMatrix, 0, 180f, 0f, 0f, 1f)
+            270 -> Matrix.rotateM(rotMatrix, 0, 90f,  0f, 0f, 1f)
+            // 0 or unknown: no rotation needed
+        }
         GLES20.glUseProgram(program)
         val aPos = GLES20.glGetAttribLocation(program, "aPosition")
         val aTex = GLES20.glGetAttribLocation(program, "aTexCoord")
         val uTex = GLES20.glGetUniformLocation(program, "uTexture")
         val uMat = GLES20.glGetUniformLocation(program, "uSTMatrix")
+        val uRot = GLES20.glGetUniformLocation(program, "uRotation")
         FULL_QUAD.position(0)
         GLES20.glVertexAttribPointer(aPos, 2, GLES20.GL_FLOAT, false, 16, FULL_QUAD)
         GLES20.glEnableVertexAttribArray(aPos)
@@ -196,6 +207,7 @@ class LiveTimestampComposer(
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId)
         GLES20.glUniform1i(uTex, 0)
         GLES20.glUniformMatrix4fv(uMat, 1, false, stMatrix, 0)
+        GLES20.glUniformMatrix4fv(uRot, 1, false, rotMatrix, 0)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
         // 2) Timestamp — compensated for orientationHint so playback shows bottom-center upright
@@ -228,39 +240,21 @@ class LiveTimestampComposer(
     }
 
     /**
-     * Place stamp so after the player rotates the file by [orientationHint] CW,
-     * text sits near the bottom of the displayed portrait frame.
+     * Place timestamp at the bottom-center of the landscape buffer.
+     * After the player applies orientationHint (e.g. 90° CW), the bottom of the
+     * landscape buffer becomes the bottom of the portrait display — so the text
+     * appears upright and bottom-center in the final played video.
      */
     private fun stampMvp(bw: Int, bh: Int): FloatArray {
         val mvp = FloatArray(16)
         Matrix.setIdentityM(mvp, 0)
+        // Scale to stamp size in NDC (landscape buffer coords)
         val scaleX = (bw.toFloat() / videoWidth) * 2f
         val scaleY = (bh.toFloat() / videoHeight) * 2f
-        val margin = 0.30f
-
-        when (orientationHint) {
-            90 -> {
-                // After 90° CW playback: buffer RIGHT → display BOTTOM
-                Matrix.translateM(mvp, 0, 1f - margin - scaleY / 2f, 0f, 0f)
-                Matrix.rotateM(mvp, 0, 90f, 0f, 0f, 1f)
-                Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
-            }
-            270 -> {
-                // After 270° CW playback: buffer LEFT → display BOTTOM
-                Matrix.translateM(mvp, 0, -1f + margin + scaleY / 2f, 0f, 0f)
-                Matrix.rotateM(mvp, 0, -90f, 0f, 0f, 1f)
-                Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
-            }
-            180 -> {
-                Matrix.translateM(mvp, 0, 0f, 1f - margin - scaleY / 2f, 0f)
-                Matrix.rotateM(mvp, 0, 180f, 0f, 0f, 1f)
-                Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
-            }
-            else -> {
-                Matrix.translateM(mvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
-                Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
-            }
-        }
+        val margin = 0.06f  // small gap from bottom edge of the landscape buffer
+        // Place at bottom-center of landscape buffer (NDC Y = -1 is bottom)
+        Matrix.translateM(mvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
+        Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
         return mvp
     }
 
@@ -418,9 +412,10 @@ class LiveTimestampComposer(
             attribute vec4 aPosition;
             attribute vec2 aTexCoord;
             uniform mat4 uSTMatrix;
+            uniform mat4 uRotation;
             varying vec2 vTexCoord;
             void main() {
-              gl_Position = aPosition;
+              gl_Position = uRotation * aPosition;
               vTexCoord = (uSTMatrix * vec4(aTexCoord.xy, 0.0, 1.0)).xy;
             }
         """
