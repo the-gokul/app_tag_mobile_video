@@ -331,7 +331,7 @@ class DeviceActivity : AppCompatActivity() {
      * landscape-encoded file plays as portrait when the phone was held upright.
      */
     private fun videoOrientationHint(): Int {
-        return currentDeviceRotation
+        return 0
     }
 
     private fun setRecordButtonUi(recording: Boolean) {
@@ -497,15 +497,15 @@ class DeviceActivity : AppCompatActivity() {
             CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH)
         }
 
-        // Natively encode based on orientation to avoid squishing
-        val isLandscape = currentDeviceRotation == 90 || currentDeviceRotation == 270
-        val outW = if (isLandscape) camProfile.videoFrameWidth else camProfile.videoFrameHeight
-        val outH = if (isLandscape) camProfile.videoFrameHeight else camProfile.videoFrameWidth
-        
+        // Standard Android camera record: landscape pixels + orientation hint for portrait play.
+        // (Many devices reject / mishandle HxW portrait encode sizes.)
+        val outW = camProfile.videoFrameWidth
+        val outH = camProfile.videoFrameHeight
+        val orientationHint = videoOrientationHint()
         TagLogger.log(
             LogCategory.FILE,
             "VIDEO_ENCODE",
-            "size=${outW}x$outH natively",
+            "size=${outW}x$outH orientationHint=$orientationHint",
         )
         val mr: MediaRecorder
         try {
@@ -513,11 +513,11 @@ class DeviceActivity : AppCompatActivity() {
             mr = MediaRecorder().apply {
                 setVideoSource(MediaRecorder.VideoSource.SURFACE)
                 setOutputFormat(MediaRecorder.OutputFormat.MPEG_4)
-                setVideoEncodingBitRate(10000000)
-                setVideoFrameRate(30)
-                setVideoSize(outW, outH)
                 setVideoEncoder(MediaRecorder.VideoEncoder.H264)
-                setOrientationHint(0) // ALWAYS 0, we encode natively!
+                setVideoSize(outW, outH)
+                setVideoFrameRate(camProfile.videoFrameRate)
+                setVideoEncodingBitRate(camProfile.videoBitRate)
+                setOrientationHint(orientationHint)
                 setOutputFile(videoFile!!.absolutePath)
                 prepare()
             }
@@ -538,7 +538,7 @@ class DeviceActivity : AppCompatActivity() {
                 outputSurface = mr.surface,
                 videoWidth = outW,
                 videoHeight = outH,
-                deviceRotation = currentDeviceRotation,
+                orientationHint = orientationHint,
                 timestampText = { currentTimestamp() },
             )
             composer.start()
