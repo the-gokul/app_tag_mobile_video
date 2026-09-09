@@ -137,7 +137,8 @@ object XlsxExporter {
         val pairs = listOf(
             "Field" to "Value",
             "Profile name" to summary.profile.name,
-            "Dog name" to summary.profile.dogName,
+            "Animal type" to summary.profile.animalType,
+            "Animal name" to summary.profile.dogName,
             "Breed" to summary.profile.breed,
             "Age" to summary.profile.age,
             "Weight (kg)" to summary.profile.weight,

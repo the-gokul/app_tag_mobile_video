@@ -115,7 +115,7 @@ class ProfileAdapter(
         val item = items[position]
         holder.name.text = item.name
         holder.details.text =
-            "Dog: ${item.dogName} | ${item.breed} | ${item.gender} | ${item.age}y | ${item.weight}kg"
+            "${item.animalType}: ${item.dogName} | ${item.breed} | ${item.gender} | ${item.age}y | ${item.weight}kg"
         holder.deleteBtn.setOnClickListener { onDelete(item) }
     }
 

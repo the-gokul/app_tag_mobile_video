@@ -8,13 +8,14 @@ import java.util.UUID
 data class UserProfile(
     val id: String = UUID.randomUUID().toString(),
     val name: String = "",
+    val animalType: String = "Dog",
     val dogName: String = "",
     val breed: String = "",
     val age: String = "",
     val weight: String = "",
     val gender: String = "" // "Male" or "Female"
 ) {
-    val isComplete: Boolean get() = name.isNotBlank() && dogName.isNotBlank() && breed.isNotBlank() && age.isNotBlank() && weight.isNotBlank() && gender.isNotBlank()
+    val isComplete: Boolean get() = name.isNotBlank() && animalType.isNotBlank() && dogName.isNotBlank() && breed.isNotBlank() && age.isNotBlank() && weight.isNotBlank() && gender.isNotBlank()
     
     val safeFileName: String get() =
         "${name.replace(Regex("[^A-Za-z0-9]"), "")}_${dogName.replace(Regex("[^A-Za-z0-9]"), "")}"
@@ -23,6 +24,7 @@ data class UserProfile(
         return JSONObject().apply {
             put("id", id)
             put("name", name)
+            put("animalType", animalType)
             put("dogName", dogName)
             put("breed", breed)
             put("age", age)
@@ -39,6 +41,7 @@ data class UserProfile(
             return UserProfile(
                 id = json.optString("id", UUID.randomUUID().toString()),
                 name = json.optString("name", ""),
+                animalType = json.optString("animalType", "Dog"),
                 dogName = json.optString("dogName", ""),
                 breed = json.optString("breed", ""),
                 age = json.optString("age", ""),

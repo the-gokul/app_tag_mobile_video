@@ -21,6 +21,16 @@ class AddProfileActivity : AppCompatActivity() {
 
         binding.addProfileBtn.setOnClickListener { saveProfile() }
         binding.saveProfileBtn.setOnClickListener { saveProfile() }
+
+        binding.animalTypeGroup.setOnCheckedChangeListener { _, checkedId ->
+            val type = when (checkedId) {
+                R.id.radioCat -> "Cat"
+                R.id.radioCattle -> "Cattle"
+                else -> "Dog"
+            }
+            binding.animalNameLabel.text = "$type's Name"
+            binding.dogNameInput.hint = "Enter your ${type.lowercase()}'s name"
+        }
     }
 
     private fun saveProfile() {
@@ -31,6 +41,12 @@ class AddProfileActivity : AppCompatActivity() {
         val weight = binding.weightInput.text.toString().trim()
         val isMale = binding.radioMale.isChecked
         val isFemale = binding.radioFemale.isChecked
+
+        val animalType = when (binding.animalTypeGroup.checkedRadioButtonId) {
+            R.id.radioCat -> "Cat"
+            R.id.radioCattle -> "Cattle"
+            else -> "Dog"
+        }
 
         var isValid = true
         if (name.isBlank()) { binding.nameInput.error = "Required"; isValid = false }
@@ -47,6 +63,7 @@ class AddProfileActivity : AppCompatActivity() {
         val profiles = UserProfile.loadAll(this).toMutableList()
         val newProfile = UserProfile(
             name = name,
+            animalType = animalType,
             dogName = dogName,
             breed = breed,
             age = age,
