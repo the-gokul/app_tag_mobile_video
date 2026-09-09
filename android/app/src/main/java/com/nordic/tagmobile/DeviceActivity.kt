@@ -311,10 +311,10 @@ class DeviceActivity : AppCompatActivity() {
 
     /**
      * How to map camera sensor frames into the forced-portrait encode buffer.
-     * Back camera sensors are almost always 90° CW from portrait UI.
+     * Build 39 used CW and stayed sideways — flip to CCW for back camera.
      */
     private fun sensorToPortraitMode(): Int {
-        val cameraId = activeCameraId ?: return LiveTimestampComposer.ROTATE_90_CW
+        val cameraId = activeCameraId ?: return LiveTimestampComposer.ROTATE_90_CCW
         return try {
             val manager = getSystemService(CAMERA_SERVICE) as CameraManager
             val chars = manager.getCameraCharacteristics(cameraId)
@@ -322,20 +322,20 @@ class DeviceActivity : AppCompatActivity() {
             val facing = chars.get(CameraCharacteristics.LENS_FACING)
             when (sensorOrientation) {
                 90 -> if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
-                    LiveTimestampComposer.ROTATE_90_CCW
-                } else {
                     LiveTimestampComposer.ROTATE_90_CW
+                } else {
+                    LiveTimestampComposer.ROTATE_90_CCW
                 }
                 270 -> if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
-                    LiveTimestampComposer.ROTATE_90_CW
-                } else {
                     LiveTimestampComposer.ROTATE_90_CCW
+                } else {
+                    LiveTimestampComposer.ROTATE_90_CW
                 }
                 180 -> LiveTimestampComposer.ROTATE_180
                 else -> LiveTimestampComposer.ROTATE_0
             }
         } catch (_: Exception) {
-            LiveTimestampComposer.ROTATE_90_CW
+            LiveTimestampComposer.ROTATE_90_CCW
         }
     }
 

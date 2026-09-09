@@ -372,9 +372,9 @@ class LiveTimestampComposer(
     companion object {
         /** No extra UV remap. */
         const val ROTATE_0 = 0
-        /** Rotate sensor image 90° clockwise into the portrait buffer (normal back camera). */
+        /** Rotate sensor image 90° clockwise into the portrait buffer. */
         const val ROTATE_90_CW = 1
-        /** Rotate sensor image 90° counter-clockwise (some front sensors). */
+        /** Rotate sensor image 90° counter-clockwise (default back-camera bake after build 39). */
         const val ROTATE_90_CCW = 2
         const val ROTATE_180 = 3
 
