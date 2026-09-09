@@ -37,8 +37,7 @@ class LiveTimestampComposer(
     private val outputSurface: Surface,
     private val videoWidth: Int,
     private val videoHeight: Int,
-    /** Same value passed to MediaRecorder.setOrientationHint (0/90/180/270). */
-    private val orientationHint: Int,
+    private val deviceRotation: Int,
     private val timestampText: () -> String,
 ) : SurfaceTexture.OnFrameAvailableListener {
 
@@ -59,7 +58,6 @@ class LiveTimestampComposer(
     private var program = 0
     private var textProgram = 0
     private val stMatrix = FloatArray(16)
-    private val rotMatrix = FloatArray(16)
     private var frameAvailable = false
 
     fun start() {
@@ -155,7 +153,7 @@ class LiveTimestampComposer(
     private fun initGl() {
         oesTexId = createOesTexture()
         textTexId = create2dTexture()
-        program = buildProgram(VERTEX_OES, FRAGMENT_OES)
+        program = buildProgram(CAMERA_VERTEX_SHADER, FRAGMENT_OES)
         textProgram = buildProgram(VERTEX_TEX, FRAGMENT_TEX)
 
         val st = SurfaceTexture(oesTexId)
@@ -181,28 +179,26 @@ class LiveTimestampComposer(
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-        // 1) Camera — draw the quad exactly as mapped by SurfaceTexture to avoid squishing
-        Matrix.setIdentityM(rotMatrix, 0)
         GLES20.glUseProgram(program)
-        val aPos = GLES20.glGetAttribLocation(program, "aPosition")
-        val aTex = GLES20.glGetAttribLocation(program, "aTexCoord")
-        val uTex = GLES20.glGetUniformLocation(program, "uTexture")
-        val uMat = GLES20.glGetUniformLocation(program, "uSTMatrix")
-        val uRot = GLES20.glGetUniformLocation(program, "uRotation")
+        val aPos = GLES20.glGetAttribLocation(program, "aPos")
+        val uRot = GLES20.glGetUniformLocation(program, "uRot")
+        val uGeomRot = GLES20.glGetUniformLocation(program, "uGeomRot")
+
         FULL_QUAD.position(0)
         GLES20.glVertexAttribPointer(aPos, 2, GLES20.GL_FLOAT, false, 16, FULL_QUAD)
         GLES20.glEnableVertexAttribArray(aPos)
-        FULL_QUAD.position(2)
-        GLES20.glVertexAttribPointer(aTex, 2, GLES20.GL_FLOAT, false, 16, FULL_QUAD)
-        GLES20.glEnableVertexAttribArray(aTex)
+        
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId)
-        GLES20.glUniform1i(uTex, 0)
-        GLES20.glUniformMatrix4fv(uMat, 1, false, stMatrix, 0)
-        GLES20.glUniformMatrix4fv(uRot, 1, false, rotMatrix, 0)
+        
+        GLES20.glUniformMatrix4fv(uRot, 1, false, stMatrix, 0)
+        val geomRot = FloatArray(16)
+        Matrix.setIdentityM(geomRot, 0)
+        Matrix.rotateM(geomRot, 0, deviceRotation.toFloat(), 0f, 0f, 1f)
+        GLES20.glUniformMatrix4fv(uGeomRot, 1, false, geomRot, 0)
+
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
-        // 2) Timestamp — compensated for orientationHint so playback shows bottom-center upright
         val bmp = renderTimestampBitmap(timestampText())
         uploadBitmap(textTexId, bmp)
         val mvp = stampMvp(bmp.width, bmp.height)
@@ -232,53 +228,24 @@ class LiveTimestampComposer(
     }
 
     private fun stampMvp(bw: Int, bh: Int): FloatArray {
-        val mvp = FloatArray(16)
         val proj = FloatArray(16)
-        // Orthographic projection: left=0, right=width, bottom=0, top=height.
-        // This allows us to position and rotate the timestamp using exact pixel coordinates,
-        // completely avoiding the NDC aspect ratio distortion that caused the squishing.
-        Matrix.orthoM(proj, 0, 0f, videoWidth.toFloat(), 0f, videoHeight.toFloat(), -1f, 1f)
-
         val model = FloatArray(16)
-        Matrix.setIdentityM(model, 0)
+        val mvp = FloatArray(16)
+        Matrix.orthoM(proj, 0, 0f, videoWidth.toFloat(), 0f, videoHeight.toFloat(), -1f, 1f)
+        
+        // Use 10% of height for margin
+        val marginPx = videoHeight * 0.10f
 
-        // Margin from the bottom matches the UI (~20% of the screen height)
-        val marginPx = minOf(videoWidth, videoHeight) * 0.20f
+        Matrix.setIdentityM(model, 0)
+        
+        // Centered horizontally, margin from bottom
+        val cx = videoWidth.toFloat() / 2f
+        val cy = marginPx + bh / 2f
+        
+        Matrix.translateM(model, 0, cx, cy, 0f)
 
         val scaleX = bw / 2f
         val scaleY = bh / 2f
-
-        // Pixel coordinates placement before Player's CW rotation
-        when (orientationHint) {
-            90 -> {
-                // To appear at the bottom, we place it at the RIGHT edge of the landscape buffer
-                val cx = videoWidth.toFloat() - marginPx - bh / 2f
-                val cy = videoHeight.toFloat() / 2f
-                Matrix.translateM(model, 0, cx, cy, 0f)
-                Matrix.rotateM(model, 0, 90f, 0f, 0f, 1f)
-            }
-            270 -> {
-                // To appear at the bottom, we place it at the LEFT edge of the landscape buffer
-                val cx = marginPx + bh / 2f
-                val cy = videoHeight.toFloat() / 2f
-                Matrix.translateM(model, 0, cx, cy, 0f)
-                Matrix.rotateM(model, 0, -90f, 0f, 0f, 1f)
-            }
-            180 -> {
-                // To appear at the bottom, we place it at the TOP edge
-                val cx = videoWidth.toFloat() / 2f
-                val cy = videoHeight.toFloat() - marginPx - bh / 2f
-                Matrix.translateM(model, 0, cx, cy, 0f)
-                Matrix.rotateM(model, 0, 180f, 0f, 0f, 1f)
-            }
-            else -> {
-                // Text at BOTTOM edge
-                val cx = videoWidth.toFloat() / 2f
-                val cy = marginPx + bh / 2f
-                Matrix.translateM(model, 0, cx, cy, 0f)
-            }
-        }
-
         Matrix.scaleM(model, 0, scaleX, scaleY, 1f)
         Matrix.multiplyMM(mvp, 0, proj, 0, model, 0)
         return mvp
@@ -434,17 +401,18 @@ class LiveTimestampComposer(
             ),
         )
 
-        private const val VERTEX_OES = """
-            attribute vec4 aPosition;
-            attribute vec2 aTexCoord;
-            uniform mat4 uSTMatrix;
-            uniform mat4 uRotation;
+        private const val CAMERA_VERTEX_SHADER = """
+            attribute vec4 aPos;
+            uniform mat4 uRot;
+            uniform mat4 uGeomRot;
             varying vec2 vTexCoord;
             void main() {
-              gl_Position = uRotation * aPosition;
-              vTexCoord = (uSTMatrix * vec4(aTexCoord.xy, 0.0, 1.0)).xy;
+                gl_Position = uGeomRot * aPos;
+                vec4 tex = vec4((aPos.x + 1.0)/2.0, (aPos.y + 1.0)/2.0, 0.0, 1.0);
+                vTexCoord = (uRot * tex).xy;
             }
         """
+
         private const val FRAGMENT_OES = """
             #extension GL_OES_EGL_image_external : require
             precision mediump float;
