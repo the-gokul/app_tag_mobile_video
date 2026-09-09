@@ -331,21 +331,7 @@ class DeviceActivity : AppCompatActivity() {
      * landscape-encoded file plays as portrait when the phone was held upright.
      */
     private fun videoOrientationHint(): Int {
-        val cameraId = activeCameraId ?: return 90
-        return try {
-            val manager = getSystemService(CAMERA_SERVICE) as CameraManager
-            val chars = manager.getCameraCharacteristics(cameraId)
-            val sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
-            val deviceRotation = currentDeviceRotation
-            val facing = chars.get(CameraCharacteristics.LENS_FACING)
-            if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
-                (sensorOrientation + deviceRotation) % 360
-            } else {
-                (sensorOrientation - deviceRotation + 360) % 360
-            }
-        } catch (_: Exception) {
-            90
-        }
+        return currentDeviceRotation
     }
 
     private fun setRecordButtonUi(recording: Boolean) {
