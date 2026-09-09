@@ -24,18 +24,21 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Camera2 → OpenGL (rotate + timestamp) → MediaRecorder.
+ * Camera2 → OpenGL → MediaRecorder (portrait-only encode).
  *
- * Camera sensors deliver landscape buffers. For portrait we encode a portrait-sized
- * frame and rotate the camera texture in UV space so pixels are upright. Timestamp
- * is drawn last, upright, at the bottom. No MediaRecorder orientation metadata.
+ * Phone cameras deliver landscape sensor buffers. We always encode a portrait
+ * frame (videoHeight > videoWidth), remap UVs so the scene is upright, then
+ * burn the timestamp upright at the bottom. No landscape encode path.
  */
 class LiveTimestampComposer(
     private val outputSurface: Surface,
     private val videoWidth: Int,
     private val videoHeight: Int,
-    /** Clockwise degrees to rotate sensor frames into display orientation (0/90/180/270). */
-    private val rotateCwDegrees: Int,
+    /**
+     * How to turn sensor frames upright in the portrait buffer.
+     * Back camera is almost always [ROTATE_90_CW].
+     */
+    private val sensorToPortrait: Int = ROTATE_90_CW,
     private val timestampText: () -> String,
 ) : SurfaceTexture.OnFrameAvailableListener {
 
@@ -48,7 +51,6 @@ class LiveTimestampComposer(
     private var eglSurface = EGL14.EGL_NO_SURFACE
 
     private var surfaceTexture: SurfaceTexture? = null
-    /** Camera2 capture target — feed this into the record session. */
     var cameraInputSurface: Surface? = null
         private set
 
@@ -57,11 +59,13 @@ class LiveTimestampComposer(
     private var program = 0
     private var textProgram = 0
     private val stMatrix = FloatArray(16)
-    private val texMatrix = FloatArray(16)
     private var frameAvailable = false
 
     fun start() {
         if (running.getAndSet(true)) return
+        require(videoHeight > videoWidth) {
+            "LiveTimestampComposer expects portrait size, got ${videoWidth}x$videoHeight"
+        }
         val t = HandlerThread("LiveTimestampComposer").also { it.start() }
         thread = t
         val h = Handler(t.looper)
@@ -118,9 +122,7 @@ class LiveTimestampComposer(
 
     private fun initEgl() {
         eglDisplay = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
-        if (eglDisplay == EGL14.EGL_NO_DISPLAY) {
-            throw RuntimeException("eglGetDisplay failed")
-        }
+        if (eglDisplay == EGL14.EGL_NO_DISPLAY) throw RuntimeException("eglGetDisplay failed")
         val version = IntArray(2)
         if (!EGL14.eglInitialize(eglDisplay, version, 0, version, 1)) {
             throw RuntimeException("eglInitialize failed")
@@ -142,14 +144,11 @@ class LiveTimestampComposer(
         val cfg = configs[0] ?: throw RuntimeException("No EGL config")
         val ctxAttribs = intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE)
         eglContext = EGL14.eglCreateContext(eglDisplay, cfg, EGL14.EGL_NO_CONTEXT, ctxAttribs, 0)
-        if (eglContext == EGL14.EGL_NO_CONTEXT) {
-            throw RuntimeException("eglCreateContext failed")
-        }
-        val surfaceAttribs = intArrayOf(EGL14.EGL_NONE)
-        eglSurface = EGL14.eglCreateWindowSurface(eglDisplay, cfg, outputSurface, surfaceAttribs, 0)
-        if (eglSurface == EGL14.EGL_NO_SURFACE) {
-            throw RuntimeException("eglCreateWindowSurface failed")
-        }
+        if (eglContext == EGL14.EGL_NO_CONTEXT) throw RuntimeException("eglCreateContext failed")
+        eglSurface = EGL14.eglCreateWindowSurface(
+            eglDisplay, cfg, outputSurface, intArrayOf(EGL14.EGL_NONE), 0,
+        )
+        if (eglSurface == EGL14.EGL_NO_SURFACE) throw RuntimeException("eglCreateWindowSurface failed")
         if (!EGL14.eglMakeCurrent(eglDisplay, eglSurface, eglSurface, eglContext)) {
             throw RuntimeException("eglMakeCurrent failed")
         }
@@ -161,19 +160,16 @@ class LiveTimestampComposer(
         program = buildProgram(VERTEX_OES, FRAGMENT_OES)
         textProgram = buildProgram(VERTEX_TEX, FRAGMENT_TEX)
 
-        // Sensor-native buffer (landscape for 90/270 encode sizes).
-        val camW = if (rotateCwDegrees == 90 || rotateCwDegrees == 270) videoHeight else videoWidth
-        val camH = if (rotateCwDegrees == 90 || rotateCwDegrees == 270) videoWidth else videoHeight
+        // Camera still produces sensor-native landscape frames (W>H).
         val st = SurfaceTexture(oesTexId)
-        st.setDefaultBufferSize(camW, camH)
+        st.setDefaultBufferSize(videoHeight, videoWidth)
         st.setOnFrameAvailableListener(this)
         surfaceTexture = st
         cameraInputSurface = Surface(st)
     }
 
     private fun drawFrame() {
-        if (!running.get()) return
-        if (eglDisplay == EGL14.EGL_NO_DISPLAY) return
+        if (!running.get() || eglDisplay == EGL14.EGL_NO_DISPLAY) return
         val st = surfaceTexture ?: return
 
         synchronized(this) {
@@ -183,18 +179,18 @@ class LiveTimestampComposer(
 
         st.updateTexImage()
         st.getTransformMatrix(stMatrix)
-        buildTexMatrix(texMatrix, stMatrix, rotateCwDegrees)
 
         GLES20.glViewport(0, 0, videoWidth, videoHeight)
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-        // 1) Camera — full viewport, orientation baked via texMatrix
+        // 1) Camera with forced portrait UV remap (not matrix rotate — that path failed on device)
         GLES20.glUseProgram(program)
         val aPos = GLES20.glGetAttribLocation(program, "aPosition")
         val aTex = GLES20.glGetAttribLocation(program, "aTexCoord")
         val uTex = GLES20.glGetUniformLocation(program, "uTexture")
-        val uMat = GLES20.glGetUniformLocation(program, "uTexMatrix")
+        val uMat = GLES20.glGetUniformLocation(program, "uSTMatrix")
+        val uRot = GLES20.glGetUniformLocation(program, "uRotateMode")
         FULL_QUAD.position(0)
         GLES20.glVertexAttribPointer(aPos, 2, GLES20.GL_FLOAT, false, 16, FULL_QUAD)
         GLES20.glEnableVertexAttribArray(aPos)
@@ -204,12 +200,12 @@ class LiveTimestampComposer(
         GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId)
         GLES20.glUniform1i(uTex, 0)
-        GLES20.glUniformMatrix4fv(uMat, 1, false, texMatrix, 0)
+        GLES20.glUniformMatrix4fv(uMat, 1, false, stMatrix, 0)
+        GLES20.glUniform1f(uRot, sensorToPortrait.toFloat())
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
-        // 2) Timestamp — upright at bottom of already-oriented buffer
-        val label = timestampText()
-        val bmp = renderTimestampBitmap(label)
+        // 2) Timestamp upright at bottom (portrait buffer — no landscape stamp logic)
+        val bmp = renderTimestampBitmap(timestampText())
         uploadBitmap(textTexId, bmp)
         val mvp = overlayMvp(bmp.width, bmp.height)
         GLES20.glEnable(GLES20.GL_BLEND)
@@ -237,24 +233,6 @@ class LiveTimestampComposer(
         EGL14.eglSwapBuffers(eglDisplay, eglSurface)
     }
 
-    /**
-     * texMatrix = stMatrix × rotateAroundCenter(cwDegrees).
-     * Rotates the camera image clockwise in UV space before SurfaceTexture's fix-up.
-     */
-    private fun buildTexMatrix(out: FloatArray, st: FloatArray, cwDegrees: Int) {
-        if (cwDegrees % 360 == 0) {
-            System.arraycopy(st, 0, out, 0, 16)
-            return
-        }
-        val rot = FloatArray(16)
-        Matrix.setIdentityM(rot, 0)
-        Matrix.translateM(rot, 0, 0.5f, 0.5f, 0f)
-        // GL rotateM is CCW → negate for clockwise bake
-        Matrix.rotateM(rot, 0, -cwDegrees.toFloat(), 0f, 0f, 1f)
-        Matrix.translateM(rot, 0, -0.5f, -0.5f, 0f)
-        Matrix.multiplyMM(out, 0, st, 0, rot, 0)
-    }
-
     private fun overlayMvp(bw: Int, bh: Int): FloatArray {
         val mvp = FloatArray(16)
         Matrix.setIdentityM(mvp, 0)
@@ -267,7 +245,7 @@ class LiveTimestampComposer(
     }
 
     private fun renderTimestampBitmap(text: String): Bitmap {
-        val shortSide = minOf(videoWidth, videoHeight).toFloat()
+        val shortSide = videoWidth.toFloat()
         val textSizePx = (shortSide * 0.042f).coerceIn(34f, 64f)
         val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
@@ -318,10 +296,7 @@ class LiveTimestampComposer(
         }
         if (eglDisplay != EGL14.EGL_NO_DISPLAY) {
             EGL14.eglMakeCurrent(
-                eglDisplay,
-                EGL14.EGL_NO_SURFACE,
-                EGL14.EGL_NO_SURFACE,
-                EGL14.EGL_NO_CONTEXT,
+                eglDisplay, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT,
             )
             if (eglSurface != EGL14.EGL_NO_SURFACE) {
                 EGL14.eglDestroySurface(eglDisplay, eglSurface)
@@ -395,6 +370,14 @@ class LiveTimestampComposer(
     }
 
     companion object {
+        /** No extra UV remap. */
+        const val ROTATE_0 = 0
+        /** Rotate sensor image 90° clockwise into the portrait buffer (normal back camera). */
+        const val ROTATE_90_CW = 1
+        /** Rotate sensor image 90° counter-clockwise (some front sensors). */
+        const val ROTATE_90_CCW = 2
+        const val ROTATE_180 = 3
+
         private fun floatBuffer(data: FloatArray): FloatBuffer =
             ByteBuffer.allocateDirect(data.size * 4)
                 .order(ByteOrder.nativeOrder())
@@ -419,14 +402,27 @@ class LiveTimestampComposer(
             ),
         )
 
+        // uRotateMode remaps UVs BEFORE SurfaceTexture transform so portrait encode is upright.
+        // Use float (not int) for wider GLES2 driver compatibility.
         private const val VERTEX_OES = """
             attribute vec4 aPosition;
             attribute vec2 aTexCoord;
-            uniform mat4 uTexMatrix;
+            uniform mat4 uSTMatrix;
+            uniform float uRotateMode;
             varying vec2 vTexCoord;
             void main() {
               gl_Position = aPosition;
-              vTexCoord = (uTexMatrix * vec4(aTexCoord.xy, 0.0, 1.0)).xy;
+              vec2 tc = aTexCoord;
+              if (uRotateMode > 0.5 && uRotateMode < 1.5) {
+                // 90° CW image: (x,y) -> (y, 1-x)
+                tc = vec2(tc.y, 1.0 - tc.x);
+              } else if (uRotateMode > 1.5 && uRotateMode < 2.5) {
+                // 90° CCW image: (x,y) -> (1-y, x)
+                tc = vec2(1.0 - tc.y, tc.x);
+              } else if (uRotateMode > 2.5) {
+                tc = vec2(1.0 - tc.x, 1.0 - tc.y);
+              }
+              vTexCoord = (uSTMatrix * vec4(tc, 0.0, 1.0)).xy;
             }
         """
         private const val FRAGMENT_OES = """
