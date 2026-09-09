@@ -105,14 +105,13 @@
                 android:id="@+id/timestampText"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
-                android:background="@android:color/transparent"
-                android:textColor="#CCFFFFFF"
+                android:background="#8C000000"
+                android:paddingHorizontal="10dp"
+                android:paddingVertical="4dp"
+                android:textColor="#FFFFFF"
                 android:textSize="14sp"
+                android:layout_marginBottom="8dp"
                 android:fontFamily="monospace"
-                android:shadowColor="#80000000"
-                android:shadowDx="1"
-                android:shadowDy="1"
-                android:shadowRadius="3"
                 android:text="00-00-0000 00:00:00:000" />
 
             <TextView

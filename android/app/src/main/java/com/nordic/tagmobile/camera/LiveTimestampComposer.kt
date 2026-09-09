@@ -210,64 +210,85 @@ class LiveTimestampComposer(
         GLES20.glUniformMatrix4fv(uRot, 1, false, rotMatrix, 0)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
-        // 2) Timestamp drawing removed temporarily for debugging compression
+        // 2) Timestamp — compensated for orientationHint so playback shows bottom-center upright
+        val bmp = renderTimestampBitmap(timestampText())
+        uploadBitmap(textTexId, bmp)
+        val mvp = stampMvp(bmp.width, bmp.height)
+        GLES20.glEnable(GLES20.GL_BLEND)
+        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
+        GLES20.glUseProgram(textProgram)
+        val tp = GLES20.glGetAttribLocation(textProgram, "aPosition")
+        val tt = GLES20.glGetAttribLocation(textProgram, "aTexCoord")
+        val tu = GLES20.glGetUniformLocation(textProgram, "uTexture")
+        val tm = GLES20.glGetUniformLocation(textProgram, "uMVP")
+        UNIT_QUAD.position(0)
+        GLES20.glVertexAttribPointer(tp, 2, GLES20.GL_FLOAT, false, 16, UNIT_QUAD)
+        GLES20.glEnableVertexAttribArray(tp)
+        UNIT_QUAD.position(2)
+        GLES20.glVertexAttribPointer(tt, 2, GLES20.GL_FLOAT, false, 16, UNIT_QUAD)
+        GLES20.glEnableVertexAttribArray(tt)
+        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
+        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textTexId)
+        GLES20.glUniform1i(tu, 0)
+        GLES20.glUniformMatrix4fv(tm, 1, false, mvp, 0)
+        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
+        GLES20.glDisable(GLES20.GL_BLEND)
+        bmp.recycle()
 
         EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, st.timestamp)
         EGL14.eglSwapBuffers(eglDisplay, eglSurface)
     }
 
-    /**
-     * Compute MVP so the timestamp stamp appears HORIZONTAL at the bottom of the
-     * portrait display after the player applies orientationHint.
-     *
-     * The stamp bitmap is bw×bh pixels of horizontal text.  We need to:
-     *  1) Scale it to NDC size in the landscape buffer.
-     *  2) Rotate it so that after the player's CW rotation the text reads left-to-right.
-     *  3) Translate it to the landscape edge that maps to the portrait bottom.
-     *
-     * Coordinate reminder (landscape buffer, player rotates the whole buffer CW by hint°):
-     *   hint=90 : landscape RIGHT edge → portrait BOTTOM ; text must rotate +90° CCW in buffer
-     *   hint=270: landscape LEFT  edge → portrait BOTTOM ; text must rotate -90° CW  in buffer
-     *   hint=180: landscape TOP   edge → portrait BOTTOM ; text must rotate 180° in buffer
-     *   hint=0  : landscape BOTTOM edge → portrait BOTTOM; text needs no rotation
-     */
     private fun stampMvp(bw: Int, bh: Int): FloatArray {
         val mvp = FloatArray(16)
-        Matrix.setIdentityM(mvp, 0)
-        // Stamp dimensions in NDC landscape space
-        val ndcW = (bw.toFloat() / videoWidth)  * 2f   // text width in landscape NDC
-        val ndcH = (bh.toFloat() / videoHeight) * 2f   // text height in landscape NDC
-        val margin = 0.04f
+        val proj = FloatArray(16)
+        // Orthographic projection: left=0, right=width, bottom=0, top=height.
+        // This allows us to position and rotate the timestamp using exact pixel coordinates,
+        // completely avoiding the NDC aspect ratio distortion that caused the squishing.
+        Matrix.orthoM(proj, 0, 0f, videoWidth.toFloat(), 0f, videoHeight.toFloat(), -1f, 1f)
 
-        // Transforms are applied in REVERSE order (scale → rotate → translate)
+        val model = FloatArray(16)
+        Matrix.setIdentityM(model, 0)
+
+        // Margin from the bottom matches the UI (~20% of the screen height)
+        val marginPx = minOf(videoWidth, videoHeight) * 0.20f
+
+        val scaleX = bw / 2f
+        val scaleY = bh / 2f
+
+        // Pixel coordinates placement before Player's CW rotation
         when (orientationHint) {
             90 -> {
-                // After +90° CCW rotation the stamp occupies ndcH in X, ndcW in Y.
-                // Place centred at the RIGHT edge of the landscape buffer.
-                Matrix.translateM(mvp, 0, 1f - margin - ndcH / 2f, 0f, 0f)
-                Matrix.rotateM(mvp, 0, 90f, 0f, 0f, 1f)
-                Matrix.scaleM(mvp, 0, ndcW / 2f, ndcH / 2f, 1f)
+                // To appear at the bottom, we place it at the RIGHT edge of the landscape buffer
+                val cx = videoWidth.toFloat() - marginPx - bh / 2f
+                val cy = videoHeight.toFloat() / 2f
+                Matrix.translateM(model, 0, cx, cy, 0f)
+                Matrix.rotateM(model, 0, 90f, 0f, 0f, 1f)
             }
             270 -> {
-                // After -90° CW rotation the stamp occupies ndcH in X, ndcW in Y.
-                // Place centred at the LEFT edge of the landscape buffer.
-                Matrix.translateM(mvp, 0, -1f + margin + ndcH / 2f, 0f, 0f)
-                Matrix.rotateM(mvp, 0, -90f, 0f, 0f, 1f)
-                Matrix.scaleM(mvp, 0, ndcW / 2f, ndcH / 2f, 1f)
+                // To appear at the bottom, we place it at the LEFT edge of the landscape buffer
+                val cx = marginPx + bh / 2f
+                val cy = videoHeight.toFloat() / 2f
+                Matrix.translateM(model, 0, cx, cy, 0f)
+                Matrix.rotateM(model, 0, -90f, 0f, 0f, 1f)
             }
             180 -> {
-                // After 180° rotation text still occupies ndcW in X, ndcH in Y (flipped).
-                // Place centred at the TOP edge of the landscape buffer.
-                Matrix.translateM(mvp, 0, 0f, 1f - margin - ndcH / 2f, 0f)
-                Matrix.rotateM(mvp, 0, 180f, 0f, 0f, 1f)
-                Matrix.scaleM(mvp, 0, ndcW / 2f, ndcH / 2f, 1f)
+                // To appear at the bottom, we place it at the TOP edge
+                val cx = videoWidth.toFloat() / 2f
+                val cy = videoHeight.toFloat() - marginPx - bh / 2f
+                Matrix.translateM(model, 0, cx, cy, 0f)
+                Matrix.rotateM(model, 0, 180f, 0f, 0f, 1f)
             }
             else -> {
-                // No player rotation — stamp at BOTTOM of landscape buffer, no rotation.
-                Matrix.translateM(mvp, 0, 0f, -1f + margin + ndcH / 2f, 0f)
-                Matrix.scaleM(mvp, 0, ndcW / 2f, ndcH / 2f, 1f)
+                // Text at BOTTOM edge
+                val cx = videoWidth.toFloat() / 2f
+                val cy = marginPx + bh / 2f
+                Matrix.translateM(model, 0, cx, cy, 0f)
             }
         }
+
+        Matrix.scaleM(model, 0, scaleX, scaleY, 1f)
+        Matrix.multiplyMM(mvp, 0, proj, 0, model, 0)
         return mvp
     }
 
@@ -288,7 +309,7 @@ class LiveTimestampComposer(
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
         val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x8C000000.toInt() }
-        canvas.drawRoundRect(0f, 0f, w.toFloat(), h.toFloat(), 6f, 6f, bg)
+        canvas.drawRect(0f, 0f, w.toFloat(), h.toFloat(), bg)
         canvas.drawText(text, padX, padY - fm.ascent, textPaint)
         return bmp
     }
