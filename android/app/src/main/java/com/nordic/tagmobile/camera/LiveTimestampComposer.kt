@@ -186,22 +186,10 @@ class LiveTimestampComposer(
         //    We counter-rotate the quad the same amount so frames are upright in the buffer.
         Matrix.setIdentityM(rotMatrix, 0)
         when (orientationHint) {
-            90 -> {
-                // Uniform fill-scale: expands the portrait content to cover the full landscape
-                // buffer (center-crop), then rotates.  Without this scale the stMatrix rotation
-                // causes content to occupy only a 720×720 square in the 1280×720 buffer,
-                // leaving black bars that the player maps to top/bottom in portrait display.
-                val fillScale = videoWidth.toFloat() / videoHeight   // e.g. 1280/720 ≈ 1.778
-                Matrix.scaleM(rotMatrix, 0, fillScale, fillScale, 1f)  // scale applied AFTER rotation
-                Matrix.rotateM(rotMatrix, 0, 90f, 0f, 0f, 1f)
-            }
+            90  -> Matrix.rotateM(rotMatrix, 0, 90f,  0f, 0f, 1f)
             180 -> Matrix.rotateM(rotMatrix, 0, 180f, 0f, 0f, 1f)
-            270 -> {
-                val fillScale = videoWidth.toFloat() / videoHeight
-                Matrix.scaleM(rotMatrix, 0, fillScale, fillScale, 1f)
-                Matrix.rotateM(rotMatrix, 0, -90f, 0f, 0f, 1f)
-            }
-            // 0 or unknown: no rotation, no scale needed
+            270 -> Matrix.rotateM(rotMatrix, 0, -90f, 0f, 0f, 1f)
+            // 0 or unknown: no rotation needed
         }
         GLES20.glUseProgram(program)
         val aPos = GLES20.glGetAttribLocation(program, "aPosition")
@@ -222,30 +210,7 @@ class LiveTimestampComposer(
         GLES20.glUniformMatrix4fv(uRot, 1, false, rotMatrix, 0)
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
-        // 2) Timestamp — compensated for orientationHint so playback shows bottom-center upright
-        val bmp = renderTimestampBitmap(timestampText())
-        uploadBitmap(textTexId, bmp)
-        val mvp = stampMvp(bmp.width, bmp.height)
-        GLES20.glEnable(GLES20.GL_BLEND)
-        GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
-        GLES20.glUseProgram(textProgram)
-        val tp = GLES20.glGetAttribLocation(textProgram, "aPosition")
-        val tt = GLES20.glGetAttribLocation(textProgram, "aTexCoord")
-        val tu = GLES20.glGetUniformLocation(textProgram, "uTexture")
-        val tm = GLES20.glGetUniformLocation(textProgram, "uMVP")
-        UNIT_QUAD.position(0)
-        GLES20.glVertexAttribPointer(tp, 2, GLES20.GL_FLOAT, false, 16, UNIT_QUAD)
-        GLES20.glEnableVertexAttribArray(tp)
-        UNIT_QUAD.position(2)
-        GLES20.glVertexAttribPointer(tt, 2, GLES20.GL_FLOAT, false, 16, UNIT_QUAD)
-        GLES20.glEnableVertexAttribArray(tt)
-        GLES20.glActiveTexture(GLES20.GL_TEXTURE0)
-        GLES20.glBindTexture(GLES20.GL_TEXTURE_2D, textTexId)
-        GLES20.glUniform1i(tu, 0)
-        GLES20.glUniformMatrix4fv(tm, 1, false, mvp, 0)
-        GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
-        GLES20.glDisable(GLES20.GL_BLEND)
-        bmp.recycle()
+        // 2) Timestamp drawing removed temporarily for debugging compression
 
         EGLExt.eglPresentationTimeANDROID(eglDisplay, eglSurface, st.timestamp)
         EGL14.eglSwapBuffers(eglDisplay, eglSurface)
