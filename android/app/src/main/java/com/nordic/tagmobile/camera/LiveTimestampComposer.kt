@@ -24,21 +24,21 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * Camera2 → OpenGL → MediaRecorder (portrait-only encode).
+ * Camera2 → OpenGL (camera + timestamp) → MediaRecorder.
  *
- * Phone cameras deliver landscape sensor buffers. We always encode a portrait
- * frame (videoHeight > videoWidth), remap UVs so the scene is upright, then
- * burn the timestamp upright at the bottom. No landscape encode path.
+ * Standard Android camera pattern (NOT portrait-pixel bake):
+ * - Encode buffer is sensor-native landscape (e.g. 1280x720).
+ * - MediaRecorder.setOrientationHint(90) makes Gallery play it as portrait.
+ * - Camera is drawn with SurfaceTexture transform only (no UV hacks).
+ * - Timestamp is placed/rotated in the landscape buffer so that AFTER the
+ *   player applies orientationHint it appears upright at the bottom.
  */
 class LiveTimestampComposer(
     private val outputSurface: Surface,
     private val videoWidth: Int,
     private val videoHeight: Int,
-    /**
-     * How to turn sensor frames upright in the portrait buffer.
-     * Back camera is almost always [ROTATE_90_CW].
-     */
-    private val sensorToPortrait: Int = ROTATE_90_CW,
+    /** Same value passed to MediaRecorder.setOrientationHint (0/90/180/270). */
+    private val orientationHint: Int,
     private val timestampText: () -> String,
 ) : SurfaceTexture.OnFrameAvailableListener {
 
@@ -63,9 +63,6 @@ class LiveTimestampComposer(
 
     fun start() {
         if (running.getAndSet(true)) return
-        require(videoHeight > videoWidth) {
-            "LiveTimestampComposer expects portrait size, got ${videoWidth}x$videoHeight"
-        }
         val t = HandlerThread("LiveTimestampComposer").also { it.start() }
         thread = t
         val h = Handler(t.looper)
@@ -160,9 +157,8 @@ class LiveTimestampComposer(
         program = buildProgram(VERTEX_OES, FRAGMENT_OES)
         textProgram = buildProgram(VERTEX_TEX, FRAGMENT_TEX)
 
-        // Camera still produces sensor-native landscape frames (W>H).
         val st = SurfaceTexture(oesTexId)
-        st.setDefaultBufferSize(videoHeight, videoWidth)
+        st.setDefaultBufferSize(videoWidth, videoHeight)
         st.setOnFrameAvailableListener(this)
         surfaceTexture = st
         cameraInputSurface = Surface(st)
@@ -184,13 +180,12 @@ class LiveTimestampComposer(
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-        // 1) Camera with forced portrait UV remap (not matrix rotate — that path failed on device)
+        // 1) Camera — SurfaceTexture matrix only (sensor frames as produced)
         GLES20.glUseProgram(program)
         val aPos = GLES20.glGetAttribLocation(program, "aPosition")
         val aTex = GLES20.glGetAttribLocation(program, "aTexCoord")
         val uTex = GLES20.glGetUniformLocation(program, "uTexture")
         val uMat = GLES20.glGetUniformLocation(program, "uSTMatrix")
-        val uRot = GLES20.glGetUniformLocation(program, "uRotateMode")
         FULL_QUAD.position(0)
         GLES20.glVertexAttribPointer(aPos, 2, GLES20.GL_FLOAT, false, 16, FULL_QUAD)
         GLES20.glEnableVertexAttribArray(aPos)
@@ -201,13 +196,12 @@ class LiveTimestampComposer(
         GLES20.glBindTexture(GLES11Ext.GL_TEXTURE_EXTERNAL_OES, oesTexId)
         GLES20.glUniform1i(uTex, 0)
         GLES20.glUniformMatrix4fv(uMat, 1, false, stMatrix, 0)
-        GLES20.glUniform1f(uRot, sensorToPortrait.toFloat())
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
-        // 2) Timestamp upright at bottom (portrait buffer — no landscape stamp logic)
+        // 2) Timestamp — compensated for orientationHint so playback shows bottom-center upright
         val bmp = renderTimestampBitmap(timestampText())
         uploadBitmap(textTexId, bmp)
-        val mvp = overlayMvp(bmp.width, bmp.height)
+        val mvp = stampMvp(bmp.width, bmp.height)
         GLES20.glEnable(GLES20.GL_BLEND)
         GLES20.glBlendFunc(GLES20.GL_SRC_ALPHA, GLES20.GL_ONE_MINUS_SRC_ALPHA)
         GLES20.glUseProgram(textProgram)
@@ -233,19 +227,45 @@ class LiveTimestampComposer(
         EGL14.eglSwapBuffers(eglDisplay, eglSurface)
     }
 
-    private fun overlayMvp(bw: Int, bh: Int): FloatArray {
+    /**
+     * Place stamp so after the player rotates the file by [orientationHint] CW,
+     * text sits near the bottom of the displayed portrait frame.
+     */
+    private fun stampMvp(bw: Int, bh: Int): FloatArray {
         val mvp = FloatArray(16)
         Matrix.setIdentityM(mvp, 0)
         val scaleX = (bw.toFloat() / videoWidth) * 2f
         val scaleY = (bh.toFloat() / videoHeight) * 2f
         val margin = 0.30f
-        Matrix.translateM(mvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
-        Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+
+        when (orientationHint) {
+            90 -> {
+                // After 90° CW playback: buffer RIGHT → display BOTTOM
+                Matrix.translateM(mvp, 0, 1f - margin - scaleY / 2f, 0f, 0f)
+                Matrix.rotateM(mvp, 0, 90f, 0f, 0f, 1f)
+                Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+            }
+            270 -> {
+                // After 270° CW playback: buffer LEFT → display BOTTOM
+                Matrix.translateM(mvp, 0, -1f + margin + scaleY / 2f, 0f, 0f)
+                Matrix.rotateM(mvp, 0, -90f, 0f, 0f, 1f)
+                Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+            }
+            180 -> {
+                Matrix.translateM(mvp, 0, 0f, 1f - margin - scaleY / 2f, 0f)
+                Matrix.rotateM(mvp, 0, 180f, 0f, 0f, 1f)
+                Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+            }
+            else -> {
+                Matrix.translateM(mvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
+                Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+            }
+        }
         return mvp
     }
 
     private fun renderTimestampBitmap(text: String): Bitmap {
-        val shortSide = videoWidth.toFloat()
+        val shortSide = minOf(videoWidth, videoHeight).toFloat()
         val textSizePx = (shortSide * 0.042f).coerceIn(34f, 64f)
         val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
@@ -370,14 +390,6 @@ class LiveTimestampComposer(
     }
 
     companion object {
-        /** No extra UV remap. */
-        const val ROTATE_0 = 0
-        /** Rotate sensor image 90° clockwise into the portrait buffer. */
-        const val ROTATE_90_CW = 1
-        /** Rotate sensor image 90° counter-clockwise (default back-camera bake after build 39). */
-        const val ROTATE_90_CCW = 2
-        const val ROTATE_180 = 3
-
         private fun floatBuffer(data: FloatArray): FloatBuffer =
             ByteBuffer.allocateDirect(data.size * 4)
                 .order(ByteOrder.nativeOrder())
@@ -402,27 +414,14 @@ class LiveTimestampComposer(
             ),
         )
 
-        // uRotateMode remaps UVs BEFORE SurfaceTexture transform so portrait encode is upright.
-        // Use float (not int) for wider GLES2 driver compatibility.
         private const val VERTEX_OES = """
             attribute vec4 aPosition;
             attribute vec2 aTexCoord;
             uniform mat4 uSTMatrix;
-            uniform float uRotateMode;
             varying vec2 vTexCoord;
             void main() {
               gl_Position = aPosition;
-              vec2 tc = aTexCoord;
-              if (uRotateMode > 0.5 && uRotateMode < 1.5) {
-                // 90° CW image: (x,y) -> (y, 1-x)
-                tc = vec2(tc.y, 1.0 - tc.x);
-              } else if (uRotateMode > 1.5 && uRotateMode < 2.5) {
-                // 90° CCW image: (x,y) -> (1-y, x)
-                tc = vec2(1.0 - tc.y, tc.x);
-              } else if (uRotateMode > 2.5) {
-                tc = vec2(1.0 - tc.x, 1.0 - tc.y);
-              }
-              vTexCoord = (uSTMatrix * vec4(tc, 0.0, 1.0)).xy;
+              vTexCoord = (uSTMatrix * vec4(aTexCoord.xy, 0.0, 1.0)).xy;
             }
         """
         private const val FRAGMENT_OES = """

@@ -310,32 +310,30 @@ class DeviceActivity : AppCompatActivity() {
     }
 
     /**
-     * How to map camera sensor frames into the forced-portrait encode buffer.
-     * Build 39 used CW and stayed sideways — flip to CCW for back camera.
+     * MediaRecorder orientation hint (clockwise). Gallery uses this so a
+     * landscape-encoded file plays as portrait when the phone was held upright.
      */
-    private fun sensorToPortraitMode(): Int {
-        val cameraId = activeCameraId ?: return LiveTimestampComposer.ROTATE_90_CCW
+    private fun videoOrientationHint(): Int {
+        val cameraId = activeCameraId ?: return 90
         return try {
             val manager = getSystemService(CAMERA_SERVICE) as CameraManager
             val chars = manager.getCameraCharacteristics(cameraId)
             val sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+            val deviceRotation = when (windowManager.defaultDisplay.rotation) {
+                Surface.ROTATION_0 -> 0
+                Surface.ROTATION_90 -> 90
+                Surface.ROTATION_180 -> 180
+                Surface.ROTATION_270 -> 270
+                else -> 0
+            }
             val facing = chars.get(CameraCharacteristics.LENS_FACING)
-            when (sensorOrientation) {
-                90 -> if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
-                    LiveTimestampComposer.ROTATE_90_CW
-                } else {
-                    LiveTimestampComposer.ROTATE_90_CCW
-                }
-                270 -> if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
-                    LiveTimestampComposer.ROTATE_90_CCW
-                } else {
-                    LiveTimestampComposer.ROTATE_90_CW
-                }
-                180 -> LiveTimestampComposer.ROTATE_180
-                else -> LiveTimestampComposer.ROTATE_0
+            if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
+                (sensorOrientation + deviceRotation) % 360
+            } else {
+                (sensorOrientation - deviceRotation + 360) % 360
             }
         } catch (_: Exception) {
-            LiveTimestampComposer.ROTATE_90_CCW
+            90
         }
     }
 
@@ -502,16 +500,15 @@ class DeviceActivity : AppCompatActivity() {
             CamcorderProfile.get(CamcorderProfile.QUALITY_HIGH)
         }
 
-        // Always save portrait pixels: camcorder profile is landscape (WxH), encode as HxW.
-        val sensorW = camProfile.videoFrameWidth
-        val sensorH = camProfile.videoFrameHeight
-        val outW = minOf(sensorW, sensorH)
-        val outH = maxOf(sensorW, sensorH)
-        val rotateMode = sensorToPortraitMode()
+        // Standard Android camera record: landscape pixels + orientation hint for portrait play.
+        // (Many devices reject / mishandle HxW portrait encode sizes.)
+        val outW = camProfile.videoFrameWidth
+        val outH = camProfile.videoFrameHeight
+        val orientationHint = videoOrientationHint()
         TagLogger.log(
             LogCategory.FILE,
-            "VIDEO_PORTRAIT_ENCODE",
-            "out=${outW}x$outH sensor=${sensorW}x$sensorH rotateMode=$rotateMode",
+            "VIDEO_ENCODE",
+            "size=${outW}x$outH orientationHint=$orientationHint",
         )
         val mr: MediaRecorder
         try {
@@ -523,8 +520,7 @@ class DeviceActivity : AppCompatActivity() {
                 setVideoSize(outW, outH)
                 setVideoFrameRate(camProfile.videoFrameRate)
                 setVideoEncodingBitRate(camProfile.videoBitRate)
-                // Pixels are already portrait-upright; do not add metadata rotation.
-                setOrientationHint(0)
+                setOrientationHint(orientationHint)
                 setOutputFile(videoFile!!.absolutePath)
                 prepare()
             }
@@ -537,7 +533,7 @@ class DeviceActivity : AppCompatActivity() {
         }
         mediaRecorder = mr
 
-        // Camera → GL (forced portrait UV + timestamp) → MediaRecorder
+        // Camera → GL (timestamp compensated for orientationHint) → MediaRecorder
         val burnSurface: Surface
         try {
             releaseLiveTimestampComposer()
@@ -545,7 +541,7 @@ class DeviceActivity : AppCompatActivity() {
                 outputSurface = mr.surface,
                 videoWidth = outW,
                 videoHeight = outH,
-                sensorToPortrait = rotateMode,
+                orientationHint = orientationHint,
                 timestampText = { currentTimestamp() },
             )
             composer.start()
@@ -816,8 +812,19 @@ class DeviceActivity : AppCompatActivity() {
         val retriever = MediaMetadataRetriever()
         return try {
             retriever.setDataSource(file.absolutePath)
-            retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+            val frame = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
                 ?: retriever.frameAtTime
+                ?: return null
+            val rotation = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_VIDEO_ROTATION)
+                ?.toIntOrNull() ?: 0
+            if (rotation == 0) {
+                frame
+            } else {
+                val m = Matrix().apply { postRotate(rotation.toFloat()) }
+                Bitmap.createBitmap(frame, 0, 0, frame.width, frame.height, m, true).also {
+                    if (it !== frame) frame.recycle()
+                }
+            }
         } catch (_: Exception) {
             null
         } finally {
