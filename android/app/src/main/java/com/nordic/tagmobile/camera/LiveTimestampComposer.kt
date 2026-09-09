@@ -186,9 +186,9 @@ class LiveTimestampComposer(
         //    We counter-rotate the quad the same amount so frames are upright in the buffer.
         Matrix.setIdentityM(rotMatrix, 0)
         when (orientationHint) {
-            90  -> Matrix.rotateM(rotMatrix, 0, -90f, 0f, 0f, 1f)
+            90  -> Matrix.rotateM(rotMatrix, 0, 90f,  0f, 0f, 1f)
             180 -> Matrix.rotateM(rotMatrix, 0, 180f, 0f, 0f, 1f)
-            270 -> Matrix.rotateM(rotMatrix, 0, 90f,  0f, 0f, 1f)
+            270 -> Matrix.rotateM(rotMatrix, 0, -90f, 0f, 0f, 1f)
             // 0 or unknown: no rotation needed
         }
         GLES20.glUseProgram(program)
@@ -240,21 +240,57 @@ class LiveTimestampComposer(
     }
 
     /**
-     * Place timestamp at the bottom-center of the landscape buffer.
-     * After the player applies orientationHint (e.g. 90° CW), the bottom of the
-     * landscape buffer becomes the bottom of the portrait display — so the text
-     * appears upright and bottom-center in the final played video.
+     * Compute MVP so the timestamp stamp appears HORIZONTAL at the bottom of the
+     * portrait display after the player applies orientationHint.
+     *
+     * The stamp bitmap is bw×bh pixels of horizontal text.  We need to:
+     *  1) Scale it to NDC size in the landscape buffer.
+     *  2) Rotate it so that after the player's CW rotation the text reads left-to-right.
+     *  3) Translate it to the landscape edge that maps to the portrait bottom.
+     *
+     * Coordinate reminder (landscape buffer, player rotates the whole buffer CW by hint°):
+     *   hint=90 : landscape RIGHT edge → portrait BOTTOM ; text must rotate +90° CCW in buffer
+     *   hint=270: landscape LEFT  edge → portrait BOTTOM ; text must rotate -90° CW  in buffer
+     *   hint=180: landscape TOP   edge → portrait BOTTOM ; text must rotate 180° in buffer
+     *   hint=0  : landscape BOTTOM edge → portrait BOTTOM; text needs no rotation
      */
     private fun stampMvp(bw: Int, bh: Int): FloatArray {
         val mvp = FloatArray(16)
         Matrix.setIdentityM(mvp, 0)
-        // Scale to stamp size in NDC (landscape buffer coords)
-        val scaleX = (bw.toFloat() / videoWidth) * 2f
-        val scaleY = (bh.toFloat() / videoHeight) * 2f
-        val margin = 0.06f  // small gap from bottom edge of the landscape buffer
-        // Place at bottom-center of landscape buffer (NDC Y = -1 is bottom)
-        Matrix.translateM(mvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
-        Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+        // Stamp dimensions in NDC landscape space
+        val ndcW = (bw.toFloat() / videoWidth)  * 2f   // text width in landscape NDC
+        val ndcH = (bh.toFloat() / videoHeight) * 2f   // text height in landscape NDC
+        val margin = 0.04f
+
+        // Transforms are applied in REVERSE order (scale → rotate → translate)
+        when (orientationHint) {
+            90 -> {
+                // After +90° CCW rotation the stamp occupies ndcH in X, ndcW in Y.
+                // Place centred at the RIGHT edge of the landscape buffer.
+                Matrix.translateM(mvp, 0, 1f - margin - ndcH / 2f, 0f, 0f)
+                Matrix.rotateM(mvp, 0, 90f, 0f, 0f, 1f)
+                Matrix.scaleM(mvp, 0, ndcW / 2f, ndcH / 2f, 1f)
+            }
+            270 -> {
+                // After -90° CW rotation the stamp occupies ndcH in X, ndcW in Y.
+                // Place centred at the LEFT edge of the landscape buffer.
+                Matrix.translateM(mvp, 0, -1f + margin + ndcH / 2f, 0f, 0f)
+                Matrix.rotateM(mvp, 0, -90f, 0f, 0f, 1f)
+                Matrix.scaleM(mvp, 0, ndcW / 2f, ndcH / 2f, 1f)
+            }
+            180 -> {
+                // After 180° rotation text still occupies ndcW in X, ndcH in Y (flipped).
+                // Place centred at the TOP edge of the landscape buffer.
+                Matrix.translateM(mvp, 0, 0f, 1f - margin - ndcH / 2f, 0f)
+                Matrix.rotateM(mvp, 0, 180f, 0f, 0f, 1f)
+                Matrix.scaleM(mvp, 0, ndcW / 2f, ndcH / 2f, 1f)
+            }
+            else -> {
+                // No player rotation — stamp at BOTTOM of landscape buffer, no rotation.
+                Matrix.translateM(mvp, 0, 0f, -1f + margin + ndcH / 2f, 0f)
+                Matrix.scaleM(mvp, 0, ndcW / 2f, ndcH / 2f, 1f)
+            }
+        }
         return mvp
     }
 
