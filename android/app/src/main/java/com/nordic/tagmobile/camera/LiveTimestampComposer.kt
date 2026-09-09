@@ -186,9 +186,9 @@ class LiveTimestampComposer(
         //    We counter-rotate the quad the same amount so frames are upright in the buffer.
         Matrix.setIdentityM(rotMatrix, 0)
         when (orientationHint) {
-            90  -> Matrix.rotateM(rotMatrix, 0, 90f,  0f, 0f, 1f)
+            90  -> Matrix.rotateM(rotMatrix, 0, -90f, 0f, 0f, 1f)
             180 -> Matrix.rotateM(rotMatrix, 0, 180f, 0f, 0f, 1f)
-            270 -> Matrix.rotateM(rotMatrix, 0, -90f, 0f, 0f, 1f)
+            270 -> Matrix.rotateM(rotMatrix, 0, 90f,  0f, 0f, 1f)
             // 0 or unknown: no rotation needed
         }
         GLES20.glUseProgram(program)
@@ -239,56 +239,22 @@ class LiveTimestampComposer(
         EGL14.eglSwapBuffers(eglDisplay, eglSurface)
     }
 
+    /**
+     * Place timestamp at the bottom-center of the landscape buffer.
+     * After the player applies orientationHint (e.g. 90° CW), the bottom of the
+     * landscape buffer becomes the bottom of the portrait display — so the text
+     * appears upright and bottom-center in the final played video.
+     */
     private fun stampMvp(bw: Int, bh: Int): FloatArray {
         val mvp = FloatArray(16)
-        val proj = FloatArray(16)
-        // Orthographic projection: left=0, right=width, bottom=0, top=height.
-        // This allows us to position and rotate the timestamp using exact pixel coordinates,
-        // completely avoiding the NDC aspect ratio distortion that caused the squishing.
-        Matrix.orthoM(proj, 0, 0f, videoWidth.toFloat(), 0f, videoHeight.toFloat(), -1f, 1f)
-
-        val model = FloatArray(16)
-        Matrix.setIdentityM(model, 0)
-
-        // Margin from the bottom matches the UI (~20% of the screen height)
-        val marginPx = minOf(videoWidth, videoHeight) * 0.20f
-
-        val scaleX = bw / 2f
-        val scaleY = bh / 2f
-
-        // Pixel coordinates placement before Player's CW rotation
-        when (orientationHint) {
-            90 -> {
-                // To appear at the bottom, we place it at the RIGHT edge of the landscape buffer
-                val cx = videoWidth.toFloat() - marginPx - bh / 2f
-                val cy = videoHeight.toFloat() / 2f
-                Matrix.translateM(model, 0, cx, cy, 0f)
-                Matrix.rotateM(model, 0, 90f, 0f, 0f, 1f)
-            }
-            270 -> {
-                // To appear at the bottom, we place it at the LEFT edge of the landscape buffer
-                val cx = marginPx + bh / 2f
-                val cy = videoHeight.toFloat() / 2f
-                Matrix.translateM(model, 0, cx, cy, 0f)
-                Matrix.rotateM(model, 0, -90f, 0f, 0f, 1f)
-            }
-            180 -> {
-                // To appear at the bottom, we place it at the TOP edge
-                val cx = videoWidth.toFloat() / 2f
-                val cy = videoHeight.toFloat() - marginPx - bh / 2f
-                Matrix.translateM(model, 0, cx, cy, 0f)
-                Matrix.rotateM(model, 0, 180f, 0f, 0f, 1f)
-            }
-            else -> {
-                // Text at BOTTOM edge
-                val cx = videoWidth.toFloat() / 2f
-                val cy = marginPx + bh / 2f
-                Matrix.translateM(model, 0, cx, cy, 0f)
-            }
-        }
-
-        Matrix.scaleM(model, 0, scaleX, scaleY, 1f)
-        Matrix.multiplyMM(mvp, 0, proj, 0, model, 0)
+        Matrix.setIdentityM(mvp, 0)
+        // Scale to stamp size in NDC (landscape buffer coords)
+        val scaleX = (bw.toFloat() / videoWidth) * 2f
+        val scaleY = (bh.toFloat() / videoHeight) * 2f
+        val margin = 0.06f  // small gap from bottom edge of the landscape buffer
+        // Place at bottom-center of landscape buffer (NDC Y = -1 is bottom)
+        Matrix.translateM(mvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
+        Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
         return mvp
     }
 
@@ -309,7 +275,7 @@ class LiveTimestampComposer(
         val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
         val canvas = Canvas(bmp)
         val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x8C000000.toInt() }
-        canvas.drawRect(0f, 0f, w.toFloat(), h.toFloat(), bg)
+        canvas.drawRoundRect(0f, 0f, w.toFloat(), h.toFloat(), 6f, 6f, bg)
         canvas.drawText(text, padX, padY - fm.ascent, textPaint)
         return bmp
     }

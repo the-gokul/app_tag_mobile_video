@@ -81,9 +81,6 @@ class DeviceActivity : AppCompatActivity() {
     private var previewSize: Size? = null
     private var activeCameraId: String? = null
 
-    private var currentDeviceRotation = 0
-    private var orientationEventListener: android.view.OrientationEventListener? = null
-
     private val surfaceListener = object : TextureView.SurfaceTextureListener {
         override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
             openCamera()
@@ -215,23 +212,10 @@ class DeviceActivity : AppCompatActivity() {
 
         timestampHandler = Handler(mainLooper)
         timestampHandler?.post(timestampRunnable)
-
-        orientationEventListener = object : android.view.OrientationEventListener(this) {
-            override fun onOrientationChanged(orientation: Int) {
-                if (orientation == ORIENTATION_UNKNOWN) return
-                currentDeviceRotation = when (orientation) {
-                    in 45..134 -> 90
-                    in 135..224 -> 180
-                    in 225..314 -> 270
-                    else -> 0
-                }
-            }
-        }
     }
 
     override fun onResume() {
         super.onResume()
-        orientationEventListener?.enable()
         startBackgroundThread()
         refreshLastVideoThumb()
         if (binding.cameraPreview.isAvailable) {
@@ -242,7 +226,6 @@ class DeviceActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
-        orientationEventListener?.disable()
         closeCamera()
         stopBackgroundThread()
         super.onPause()
@@ -331,7 +314,27 @@ class DeviceActivity : AppCompatActivity() {
      * landscape-encoded file plays as portrait when the phone was held upright.
      */
     private fun videoOrientationHint(): Int {
-        return 0
+        val cameraId = activeCameraId ?: return 90
+        return try {
+            val manager = getSystemService(CAMERA_SERVICE) as CameraManager
+            val chars = manager.getCameraCharacteristics(cameraId)
+            val sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+            val deviceRotation = when (windowManager.defaultDisplay.rotation) {
+                Surface.ROTATION_0 -> 0
+                Surface.ROTATION_90 -> 90
+                Surface.ROTATION_180 -> 180
+                Surface.ROTATION_270 -> 270
+                else -> 0
+            }
+            val facing = chars.get(CameraCharacteristics.LENS_FACING)
+            if (facing == CameraCharacteristics.LENS_FACING_FRONT) {
+                (sensorOrientation + deviceRotation) % 360
+            } else {
+                (sensorOrientation - deviceRotation + 360) % 360
+            }
+        } catch (_: Exception) {
+            90
+        }
     }
 
     private fun setRecordButtonUi(recording: Boolean) {
