@@ -46,9 +46,10 @@ class HistoryActivity : AppCompatActivity() {
             AlertDialog.Builder(this)
                 .setTitle("Session Info")
                 .setMessage(
-                    "Name: ${it.baseName}\nStatus: ${it.status}\nPackets: ${it.packetCount}\n" +
+                    "Session: ${it.baseName}\nStatus: ${it.status}\nPackets: ${it.packetCount}\n" +
                         "Samples: ${it.sampleCount}\nData: ${if (it.dataFile.exists()) "Yes" else "No"}\n" +
-                        "Video: ${if (it.videoFile?.exists() == true) "Yes" else "No"}",
+                        "Video: ${if (it.videoFile?.exists() == true) "Yes" else "No"}\n" +
+                        "Folder: ${it.sessionDir?.name ?: "legacy (flat files)"}",
                 )
                 .setPositiveButton("OK", null)
                 .show()

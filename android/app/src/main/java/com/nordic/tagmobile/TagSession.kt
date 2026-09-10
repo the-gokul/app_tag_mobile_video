@@ -12,9 +12,17 @@ object TagSession {
     var connectedDevice: ConnectedDevice? = null
     var recordingState: RecordingState = RecordingState.IDLE
     var syncBaseUnixMs: Long = 0L
-    /** Shared CSV/log/video base name for the current session (set at Start). */
+    /** Session id for current recording, e.g. SESSION-20260910-174530-a1b2 (set at Start). */
     var sessionBaseName: String = ""
     var tagUptimeAtSync: Long? = null
+
+    // Recording metadata for manifest.json (set at Start / Stop)
+    var recordingStartUnixMs: Long = 0L
+    var recordingVideoWidth: Int? = null
+    var recordingVideoHeight: Int? = null
+    var recordingVideoFps: Int? = null
+    var recordingOrientationHint: Int? = null
+
     val receivedRows: MutableList<SensorCsvRow> = mutableListOf()
     val packetIds: MutableList<Long> = mutableListOf()
     var packetCount: Int = 0
@@ -34,6 +42,11 @@ object TagSession {
         syncBaseUnixMs = 0L
         sessionBaseName = ""
         tagUptimeAtSync = null
+        recordingStartUnixMs = 0L
+        recordingVideoWidth = null
+        recordingVideoHeight = null
+        recordingVideoFps = null
+        recordingOrientationHint = null
         receivedRows.clear()
         packetIds.clear()
         packetCount = 0

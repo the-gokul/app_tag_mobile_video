@@ -3,4 +3,5 @@
     <files-path name="data" path="data/" />
     <files-path name="logs" path="logs/" />
     <files-path name="videos" path="videos/" />
+    <files-path name="sessions" path="sessions/" />
 </paths>

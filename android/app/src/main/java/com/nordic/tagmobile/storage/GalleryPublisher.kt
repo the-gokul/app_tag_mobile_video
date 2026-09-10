@@ -17,13 +17,17 @@ import java.io.File
  */
 object GalleryPublisher {
 
-    fun publishVideo(context: Context, videoFile: File): Uri? {
+    /**
+     * @param displayName optional Gallery filename. Use session id (e.g. SESSION-….mp4)
+     * when the on-disk file is a fixed name like `video.mp4`.
+     */
+    fun publishVideo(context: Context, videoFile: File, displayName: String? = null): Uri? {
         if (!videoFile.exists() || videoFile.length() <= 0L) return null
+        val name = displayName?.takeIf { it.isNotBlank() } ?: videoFile.name
         // Replace any prior gallery copy with the same name (e.g. re-burn)
-        deleteByDisplayName(context, videoFile.name)
+        deleteByDisplayName(context, name)
         return try {
             val resolver = context.contentResolver
-            val name = videoFile.name
             val values = ContentValues().apply {
                 put(MediaStore.Video.Media.DISPLAY_NAME, name)
                 put(MediaStore.Video.Media.MIME_TYPE, "video/mp4")

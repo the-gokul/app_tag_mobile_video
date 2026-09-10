@@ -41,6 +41,7 @@ import com.nordic.tagmobile.protocol.SensorPacketParser.HEADER_SIZE
 import com.nordic.tagmobile.protocol.XlsxExporter
 import com.nordic.tagmobile.storage.GalleryPublisher
 import com.nordic.tagmobile.storage.RecordingStore
+import com.nordic.tagmobile.storage.SessionManifestData
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -169,11 +170,9 @@ class DeviceActivity : AppCompatActivity() {
                     } catch (_: Exception) {
                     }
                     mediaRecorder = null
-                    videoFile?.delete()
-                    videoFile = null
+                    discardIncompleteSession()
                     isRecording = false
                     TagSession.recordingState = RecordingState.IDLE
-                    TagSession.sessionBaseName = ""
                     setRecordButtonUi(recording = false)
                     startPreview()
                     Toast.makeText(this@DeviceActivity, message, Toast.LENGTH_LONG).show()
@@ -499,16 +498,11 @@ class DeviceActivity : AppCompatActivity() {
         TagSession.lastHistoryEntry = null
         TagSession.tagUptimeAtSync = null
         TagSession.syncBaseUnixMs = System.currentTimeMillis()
-        val deviceName = TagSession.connectedDevice?.name ?: "Tag"
-        val profilePrefix = TagSession.userProfile.safeFileName
-        TagSession.sessionBaseName = RecordingStore.makeBaseName(
-            deviceName,
-            atMs = TagSession.syncBaseUnixMs,
-            profilePrefix = profilePrefix,
-        )
+        TagSession.recordingStartUnixMs = TagSession.syncBaseUnixMs
+        TagSession.sessionBaseName = RecordingStore.makeSessionId(TagSession.syncBaseUnixMs)
 
-        val videoDir = File(filesDir, "videos").also { it.mkdirs() }
-        videoFile = File(videoDir, "${TagSession.sessionBaseName}.mp4")
+        val sessionDir = RecordingStore.createSessionDir(this, TagSession.sessionBaseName)
+        videoFile = RecordingStore.sessionVideoFile(sessionDir)
 
         // Phone-default camcorder profile (no CameraConfig forced size/orientation)
         val camProfile = try {
@@ -531,6 +525,10 @@ class DeviceActivity : AppCompatActivity() {
         val outW = camProfile.videoFrameWidth
         val outH = camProfile.videoFrameHeight
         val orientationHint = videoOrientationHint()
+        TagSession.recordingVideoWidth = outW
+        TagSession.recordingVideoHeight = outH
+        TagSession.recordingVideoFps = camProfile.videoFrameRate
+        TagSession.recordingOrientationHint = orientationHint
 
         val cameraId = activeCameraId ?: "0"
         val manager = getSystemService(CAMERA_SERVICE) as CameraManager
@@ -565,8 +563,7 @@ class DeviceActivity : AppCompatActivity() {
             }
         } catch (e: Exception) {
             TagLogger.log(LogCategory.ERRORS, "VIDEO_PREPARE_ERR", e.message ?: "")
-            videoFile?.delete()
-            videoFile = null
+            discardIncompleteSession()
             Toast.makeText(this, "Video setup failed: ${e.message}", Toast.LENGTH_LONG).show()
             return
         }
@@ -676,14 +673,25 @@ class DeviceActivity : AppCompatActivity() {
         } catch (_: Exception) {
         }
         mediaRecorder = null
-        videoFile?.delete()
-        videoFile = null
-        TagSession.sessionBaseName = ""
+        discardIncompleteSession()
         TagSession.recordingState = RecordingState.IDLE
         isRecording = false
         setRecordButtonUi(recording = false)
         startPreview()
         Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    }
+
+    /** Delete partial session folder / video when Start fails before a successful save. */
+    private fun discardIncompleteSession() {
+        val sessionId = TagSession.sessionBaseName
+        videoFile?.delete()
+        videoFile = null
+        if (sessionId.startsWith("SESSION-")) {
+            val dir = RecordingStore.sessionDir(this, sessionId)
+            dir.listFiles()?.forEach { it.delete() }
+            dir.delete()
+        }
+        TagSession.sessionBaseName = ""
     }
 
     private fun stopRecording() {
@@ -739,17 +747,12 @@ class DeviceActivity : AppCompatActivity() {
         val recordedVideo = vFile
 
         try {
-            val baseName = TagSession.sessionBaseName.ifBlank {
-                val deviceName = TagSession.connectedDevice?.name
-                    ?: TagSession.receivedRows.firstOrNull()?.deviceId
-                    ?: "Tag"
-                RecordingStore.makeBaseName(
-                    deviceName,
-                    atMs = syncBase.takeIf { it > 0L } ?: System.currentTimeMillis(),
-                    profilePrefix = TagSession.userProfile.safeFileName,
-                )
+            val sessionId = TagSession.sessionBaseName.ifBlank {
+                RecordingStore.makeSessionId(syncBase.takeIf { it > 0L } ?: System.currentTimeMillis())
             }
-            val dataFile = RecordingStore.dataFile(this, baseName)
+            TagSession.sessionBaseName = sessionId
+            val sessionDir = RecordingStore.createSessionDir(this, sessionId)
+            val dataFile = RecordingStore.sessionDataFile(sessionDir)
             XlsxExporter.write(
                 outFile = dataFile,
                 rows = TagSession.receivedRows,
@@ -767,7 +770,7 @@ class DeviceActivity : AppCompatActivity() {
 
             val logBody = buildString {
                 appendLine("Tag session log")
-                appendLine("base_name=$baseName")
+                appendLine("session_id=$sessionId")
                 appendLine("device=${deviceLabel()}")
                 appendLine("packets=${report.packetCount}")
                 appendLine("samples=${report.sampleCount}")
@@ -776,30 +779,93 @@ class DeviceActivity : AppCompatActivity() {
                 appendLine("---")
                 append(TagLogger.sessionSnapshot())
             }
+
+            val profile = TagSession.userProfile
+            val endMs = System.currentTimeMillis()
+            val startMs = TagSession.recordingStartUnixMs.takeIf { it > 0L }
+                ?: TagSession.syncBaseUnixMs.takeIf { it > 0L }
+                ?: endMs
+            val pkgInfo = try {
+                packageManager.getPackageInfo(packageName, 0)
+            } catch (_: Exception) {
+                null
+            }
+            val manifest = SessionManifestData(
+                sessionId = sessionId,
+                packetCount = report.packetCount,
+                sampleCount = report.sampleCount,
+                parseFailures = report.parseFailures,
+                statusDetail = report.statusDetail.ifBlank { report.statusShort },
+                hasPossibleLoss = report.hasPossibleLoss,
+                terminationReason = "USER_STOP",
+                localUserId = profile.id,
+                userName = profile.name,
+                localPetId = profile.id,
+                petName = profile.dogName,
+                animalType = profile.animalType,
+                breed = profile.breed,
+                sex = profile.gender,
+                age = profile.age,
+                weightKg = profile.weight,
+                deviceId = TagSession.connectedDevice?.name
+                    ?: TagSession.receivedRows.firstOrNull()?.deviceId
+                    ?: "Tag",
+                deviceAddress = TagSession.connectedDevice?.address ?: "",
+                hardwareVersion = null,
+                firmwareVersion = null,
+                startTimeMs = startMs,
+                endTimeMs = endMs,
+                videoWidth = TagSession.recordingVideoWidth,
+                videoHeight = TagSession.recordingVideoHeight,
+                videoFps = TagSession.recordingVideoFps,
+                orientationHint = TagSession.recordingOrientationHint,
+                videoOrientationLabel = SessionManifestData.orientationLabel(
+                    TagSession.recordingOrientationHint,
+                ),
+                sensorSamplePeriodMs = TagSession.deviceConfig.samplePeriodMs,
+                sensorSamplesPerPacket = TagSession.deviceConfig.samplesPerPacket,
+                phoneStartTimestampMs = TagSession.syncBaseUnixMs.takeIf { it > 0L } ?: startMs,
+                collarUptimeAtSyncMs = TagSession.tagUptimeAtSync,
+                offsetMs = null,
+                batteryStartPercent = null,
+                batteryEndPercent = null,
+                hasData = dataFile.exists(),
+                hasVideo = recordedVideo?.exists() == true,
+                galleryUri = null,
+                appVersionName = pkgInfo?.versionName ?: "0.3.0",
+                appVersionCode = if (android.os.Build.VERSION.SDK_INT >= 28) {
+                    pkgInfo?.longVersionCode?.toInt() ?: 0
+                } else {
+                    @Suppress("DEPRECATION")
+                    pkgInfo?.versionCode ?: 0
+                },
+            )
             val entry = RecordingStore.saveRecording(
                 context = this,
-                baseName = baseName,
+                baseName = sessionId,
                 logContent = logBody,
                 packetCount = report.packetCount,
                 sampleCount = report.sampleCount,
                 status = report.statusShort,
+                manifest = manifest,
             )
             TagSession.lastHistoryEntry = entry
             TagSession.lastFeedbackText = report.feedbackText
             TagSession.recordingState = RecordingState.RECEIVED
             Toast.makeText(this, "Saved ${entry.baseName}\nVideo: $vSize", Toast.LENGTH_LONG).show()
 
-            // Timestamp already in file — only publish to Gallery (fast copy)
+            // Timestamp already in file — publish to Gallery as SESSION-….mp4 (local file stays video.mp4)
             if (recordedVideo != null && recordedVideo.exists()) {
                 Thread {
                     val galleryUri = GalleryPublisher.publishVideo(
                         applicationContext,
                         recordedVideo,
+                        displayName = "$sessionId.mp4",
                     )
                     if (galleryUri != null) {
                         RecordingStore.updateGalleryUri(
                             applicationContext,
-                            baseName,
+                            sessionId,
                             galleryUri.toString(),
                         )
                         TagSession.lastHistoryEntry =
@@ -821,13 +887,7 @@ class DeviceActivity : AppCompatActivity() {
         refreshLastVideoThumb()
     }
 
-    private fun latestVideoFile(): File? {
-        val dir = File(filesDir, "videos")
-        if (!dir.isDirectory) return null
-        return dir.listFiles()
-            ?.filter { it.isFile && (it.extension.equals("mp4", true) || it.extension.equals("webm", true)) && it.length() > 0L }
-            ?.maxByOrNull { it.lastModified() }
-    }
+    private fun latestVideoFile(): File? = RecordingStore.latestVideoFile(this)
 
     private fun refreshLastVideoThumb() {
         val file = latestVideoFile()
