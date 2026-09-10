@@ -18,7 +18,9 @@ import android.os.Handler
 import android.os.HandlerThread
 import android.os.SystemClock
 import android.util.Size
+import android.util.Log
 import android.view.MenuItem
+import android.view.OrientationEventListener
 import android.view.Surface
 import android.view.TextureView
 import android.view.View
@@ -80,6 +82,9 @@ class DeviceActivity : AppCompatActivity() {
     }
     private var previewSize: Size? = null
     private var activeCameraId: String? = null
+
+    private var orientationEventListener: OrientationEventListener? = null
+    private var currentPhysicalRotation = Surface.ROTATION_0
 
     private val surfaceListener = object : TextureView.SurfaceTextureListener {
         override fun onSurfaceTextureAvailable(st: SurfaceTexture, w: Int, h: Int) {
@@ -212,10 +217,28 @@ class DeviceActivity : AppCompatActivity() {
 
         timestampHandler = Handler(mainLooper)
         timestampHandler?.post(timestampRunnable)
+
+        orientationEventListener = object : OrientationEventListener(this) {
+            override fun onOrientationChanged(orientation: Int) {
+                if (orientation == ORIENTATION_UNKNOWN) return
+                // Map the 0-359 physical angle to matching Surface.ROTATION constants
+                // 0 is portrait, 90 is right side down (landscape), etc.
+                val newRotation = when (orientation) {
+                    in 45..134 -> Surface.ROTATION_270 // Right edge down
+                    in 135..224 -> Surface.ROTATION_180 // Top edge down
+                    in 225..314 -> Surface.ROTATION_90 // Left edge down
+                    else -> Surface.ROTATION_0 // Portrait
+                }
+                if (newRotation != currentPhysicalRotation) {
+                    currentPhysicalRotation = newRotation
+                }
+            }
+        }
     }
 
     override fun onResume() {
         super.onResume()
+        orientationEventListener?.enable()
         startBackgroundThread()
         refreshLastVideoThumb()
         if (binding.cameraPreview.isAvailable) {
@@ -226,6 +249,7 @@ class DeviceActivity : AppCompatActivity() {
     }
 
     override fun onPause() {
+        orientationEventListener?.disable()
         closeCamera()
         stopBackgroundThread()
         super.onPause()
@@ -319,7 +343,9 @@ class DeviceActivity : AppCompatActivity() {
             val manager = getSystemService(CAMERA_SERVICE) as CameraManager
             val chars = manager.getCameraCharacteristics(cameraId)
             val sensorOrientation = chars.get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
-            val deviceRotation = when (windowManager.defaultDisplay.rotation) {
+            
+            // Use physical rotation tracked by our listener instead of locked display rotation
+            val deviceRotation = when (currentPhysicalRotation) {
                 Surface.ROTATION_0 -> 0
                 Surface.ROTATION_90 -> 90
                 Surface.ROTATION_180 -> 180
@@ -505,6 +531,19 @@ class DeviceActivity : AppCompatActivity() {
         val outW = camProfile.videoFrameWidth
         val outH = camProfile.videoFrameHeight
         val orientationHint = videoOrientationHint()
+
+        val cameraId = activeCameraId ?: "0"
+        val manager = getSystemService(CAMERA_SERVICE) as CameraManager
+        val sensorOrientation = try {
+            manager.getCameraCharacteristics(cameraId).get(CameraCharacteristics.SENSOR_ORIENTATION) ?: 90
+        } catch (_: Exception) { 90 }
+
+        Log.d("OrientationDebug", "Physical orientation = $currentPhysicalRotation (0=Port, 1=Land, 2=RevPort, 3=RevLand)")
+        Log.d("OrientationDebug", "Sensor orientation = $sensorOrientation")
+        Log.d("OrientationDebug", "Recording orientation (hint) = $orientationHint")
+        Log.d("OrientationDebug", "Video size = ${outW}x${outH}")
+        Log.d("OrientationDebug", "Timestamp orientation = $orientationHint")
+
         TagLogger.log(
             LogCategory.FILE,
             "VIDEO_ENCODE",

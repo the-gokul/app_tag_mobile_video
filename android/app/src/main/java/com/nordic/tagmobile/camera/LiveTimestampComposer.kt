@@ -181,16 +181,10 @@ class LiveTimestampComposer(
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-        // 1) Camera — rotate the quad to correct for sensor vs orientationHint
-        //    The sensor is landscape; orientationHint tells the player to rotate CW.
-        //    We counter-rotate the quad the same amount so frames are upright in the buffer.
+        // 1) Camera — pass through without rotating.
+        //    The raw sensor frames are written to the landscape buffer.
+        //    The MediaRecorder orientationHint will rotate the final MP4 upon playback.
         Matrix.setIdentityM(rotMatrix, 0)
-        when (orientationHint) {
-            90  -> Matrix.rotateM(rotMatrix, 0, -90f, 0f, 0f, 1f)
-            180 -> Matrix.rotateM(rotMatrix, 0, 180f, 0f, 0f, 1f)
-            270 -> Matrix.rotateM(rotMatrix, 0, 90f,  0f, 0f, 1f)
-            // 0 or unknown: no rotation needed
-        }
         GLES20.glUseProgram(program)
         val aPos = GLES20.glGetAttribLocation(program, "aPosition")
         val aTex = GLES20.glGetAttribLocation(program, "aTexCoord")
@@ -240,22 +234,38 @@ class LiveTimestampComposer(
     }
 
     /**
-     * Place timestamp at the bottom-center of the landscape buffer.
-     * After the player applies orientationHint (e.g. 90° CW), the bottom of the
-     * landscape buffer becomes the bottom of the portrait display — so the text
-     * appears upright and bottom-center in the final played video.
+     * Place timestamp at the bottom-center of the visual frame.
+     * The video player will apply orientationHint (CW rotation) to the final MP4.
+     * To ensure the text is upright and at the bottom after the player's rotation,
+     * we pre-rotate it by -orientationHint (CCW).
      */
     private fun stampMvp(bw: Int, bh: Int): FloatArray {
-        val mvp = FloatArray(16)
-        Matrix.setIdentityM(mvp, 0)
-        // Scale to stamp size in NDC (landscape buffer coords)
-        val scaleX = (bw.toFloat() / videoWidth) * 2f
-        val scaleY = (bh.toFloat() / videoHeight) * 2f
-        val margin = 0.06f  // small gap from bottom edge of the landscape buffer
-        // Place at bottom-center of landscape buffer (NDC Y = -1 is bottom)
-        Matrix.translateM(mvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
-        Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
-        return mvp
+        val isPortrait = orientationHint == 90 || orientationHint == 270
+        val visualW = if (isPortrait) videoHeight.toFloat() else videoWidth.toFloat()
+        val visualH = if (isPortrait) videoWidth.toFloat() else videoHeight.toFloat()
+
+        val scaleX = (bw.toFloat() / visualW) * 2f
+        val scaleY = (bh.toFloat() / visualH) * 2f
+        val margin = 0.06f
+
+        val visualMvp = FloatArray(16)
+        Matrix.setIdentityM(visualMvp, 0)
+        // Position at bottom-center of the visual orientation
+        Matrix.translateM(visualMvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
+        Matrix.scaleM(visualMvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+
+        val bufferMvp = FloatArray(16)
+        Matrix.setIdentityM(bufferMvp, 0)
+        // Counter-rotate the visual coordinates back to buffer coordinates
+        when (orientationHint) {
+            90 -> Matrix.rotateM(bufferMvp, 0, -90f, 0f, 0f, 1f)
+            180 -> Matrix.rotateM(bufferMvp, 0, -180f, 0f, 0f, 1f)
+            270 -> Matrix.rotateM(bufferMvp, 0, -270f, 0f, 0f, 1f)
+        }
+
+        val finalMvp = FloatArray(16)
+        Matrix.multiplyMM(finalMvp, 0, bufferMvp, 0, visualMvp, 0)
+        return finalMvp
     }
 
     private fun renderTimestampBitmap(text: String): Bitmap {
