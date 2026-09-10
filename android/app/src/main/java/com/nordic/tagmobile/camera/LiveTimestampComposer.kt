@@ -237,7 +237,7 @@ class LiveTimestampComposer(
      * Place timestamp at the bottom-center of the visual frame.
      * The video player will apply orientationHint (CW rotation) to the final MP4.
      * To ensure the text is upright and at the bottom after the player's rotation,
-     * we pre-rotate it by -orientationHint (CCW).
+     * we pre-rotate it by -orientationHint (CCW) and place it on the corresponding edge.
      */
     private fun stampMvp(bw: Int, bh: Int): FloatArray {
         val isPortrait = orientationHint == 90 || orientationHint == 270
@@ -248,24 +248,42 @@ class LiveTimestampComposer(
         val scaleY = (bh.toFloat() / visualH) * 2f
         val margin = 0.06f
 
-        val visualMvp = FloatArray(16)
-        Matrix.setIdentityM(visualMvp, 0)
-        // Position at bottom-center of the visual orientation
-        Matrix.translateM(visualMvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
-        Matrix.scaleM(visualMvp, 0, scaleX / 2f, scaleY / 2f, 1f)
-
-        val bufferMvp = FloatArray(16)
-        Matrix.setIdentityM(bufferMvp, 0)
-        // Counter-rotate the visual coordinates back to buffer coordinates
+        val mvp = FloatArray(16)
+        Matrix.setIdentityM(mvp, 0)
+        
         when (orientationHint) {
-            90 -> Matrix.rotateM(bufferMvp, 0, -90f, 0f, 0f, 1f)
-            180 -> Matrix.rotateM(bufferMvp, 0, -180f, 0f, 0f, 1f)
-            270 -> Matrix.rotateM(bufferMvp, 0, -270f, 0f, 0f, 1f)
+            0 -> {
+                // Player rotates 0. Visual bottom is raw Bottom edge (Y=-1).
+                Matrix.translateM(mvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
+                Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+            }
+            90 -> {
+                // Player rotates 90 CW. Visual bottom is raw Right edge (X=1).
+                // Text must read Bottom-to-Top (+90 deg) so 90 CW rotation makes it upright.
+                Matrix.translateM(mvp, 0, 1f - margin - scaleY / 2f, 0f, 0f)
+                Matrix.rotateM(mvp, 0, 90f, 0f, 0f, 1f)
+                Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+            }
+            180 -> {
+                // Player rotates 180 CW. Visual bottom is raw Top edge (Y=1).
+                // Text must read Right-to-Left (+180 deg).
+                Matrix.translateM(mvp, 0, 0f, 1f - margin - scaleY / 2f, 0f)
+                Matrix.rotateM(mvp, 0, 180f, 0f, 0f, 1f)
+                Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+            }
+            270 -> {
+                // Player rotates 270 CW. Visual bottom is raw Left edge (X=-1).
+                // Text must read Top-to-Bottom (+270 deg).
+                Matrix.translateM(mvp, 0, -1f + margin + scaleY / 2f, 0f, 0f)
+                Matrix.rotateM(mvp, 0, 270f, 0f, 0f, 1f)
+                Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+            }
+            else -> {
+                Matrix.translateM(mvp, 0, 0f, -1f + margin + scaleY / 2f, 0f)
+                Matrix.scaleM(mvp, 0, scaleX / 2f, scaleY / 2f, 1f)
+            }
         }
-
-        val finalMvp = FloatArray(16)
-        Matrix.multiplyMM(finalMvp, 0, bufferMvp, 0, visualMvp, 0)
-        return finalMvp
+        return mvp
     }
 
     private fun renderTimestampBitmap(text: String): Bitmap {
