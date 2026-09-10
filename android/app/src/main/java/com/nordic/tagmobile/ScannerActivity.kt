@@ -183,7 +183,15 @@ class ScannerActivity : AppCompatActivity() {
 
     private fun showAssignProfileDialog() {
         val profiles = com.nordic.tagmobile.model.UserProfile.loadAll(this)
-        
+        val tagName = TagSession.connectedDevice?.name?.ifBlank { null } ?: pendingName.ifBlank { "Tag" }
+
+        // One pet: skip picker + confirm — assign and open Device.
+        if (profiles.size == 1) {
+            TagSession.userProfile = profiles.first()
+            goToDevice()
+            return
+        }
+
         val dialogView = LayoutInflater.from(this).inflate(R.layout.dialog_assign_profile, null)
         val spinner = dialogView.findViewById<Spinner>(R.id.profileSpinner)
         val emptyText = dialogView.findViewById<TextView>(R.id.emptyProfilesText)
@@ -195,7 +203,7 @@ class ScannerActivity : AppCompatActivity() {
             emptyText.visibility = View.VISIBLE
             assignBtn.isEnabled = false
         } else {
-            val names = profiles.map { "${it.dogName} (${it.name})" }
+            val names = profiles.map { it.dogName.ifBlank { "Pet" } }
             spinner.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, names)
         }
 
@@ -213,14 +221,43 @@ class ScannerActivity : AppCompatActivity() {
         assignBtn.setOnClickListener {
             val selectedIdx = spinner.selectedItemPosition
             if (selectedIdx >= 0 && selectedIdx < profiles.size) {
-                TagSession.userProfile = profiles[selectedIdx]
+                val selected = profiles[selectedIdx]
                 dialog.dismiss()
-                startActivity(Intent(this@ScannerActivity, DeviceActivity::class.java))
-                finish()
+                // 2+ pets: confirm wearing this collar before Device.
+                showWearConfirmDialog(selected, tagName)
             }
         }
 
         dialog.show()
+    }
+
+    private fun showWearConfirmDialog(
+        profile: com.nordic.tagmobile.model.UserProfile,
+        tagName: String,
+    ) {
+        AlertDialog.Builder(this)
+            .setTitle(R.string.confirm_pet_wearing_title)
+            .setMessage(
+                getString(
+                    R.string.confirm_pet_wearing_message,
+                    profile.dogName.ifBlank { profile.name },
+                    tagName,
+                ),
+            )
+            .setCancelable(false)
+            .setNegativeButton(R.string.confirm_no) { _, _ ->
+                showAssignProfileDialog()
+            }
+            .setPositiveButton(R.string.confirm_yes) { _, _ ->
+                TagSession.userProfile = profile
+                goToDevice()
+            }
+            .show()
+    }
+
+    private fun goToDevice() {
+        startActivity(Intent(this@ScannerActivity, DeviceActivity::class.java))
+        finish()
     }
 
     companion object {

@@ -18,8 +18,8 @@ import java.io.File
 object GalleryPublisher {
 
     /**
-     * @param displayName optional Gallery filename. Use session id (e.g. SESSION-….mp4)
-     * when the on-disk file is a fixed name like `video.mp4`.
+     * @param displayName optional Gallery filename. Defaults to [videoFile] name
+     * (session packages use SESSION-….mp4).
      */
     fun publishVideo(context: Context, videoFile: File, displayName: String? = null): Uri? {
         if (!videoFile.exists() || videoFile.length() <= 0L) return null

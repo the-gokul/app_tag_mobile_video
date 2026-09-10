@@ -4,6 +4,7 @@ import com.nordic.tagmobile.model.ConnectedDevice
 import com.nordic.tagmobile.model.CameraConfig
 import com.nordic.tagmobile.model.DeviceConfig
 import com.nordic.tagmobile.model.RecordingState
+import com.nordic.tagmobile.model.AppUser
 import com.nordic.tagmobile.model.UserProfile
 import com.nordic.tagmobile.protocol.SensorCsvRow
 import com.nordic.tagmobile.storage.HistoryEntry
@@ -33,8 +34,11 @@ object TagSession {
     var lastHistoryEntry: HistoryEntry? = null
     var lastFeedbackText: String = ""
 
-    // ── Profile & Camera ─────────────────────────────────────────────────────
+    // ── User & pet ───────────────────────────────────────────────────────────
+    var appUser: AppUser = AppUser()
     var userProfile: UserProfile = UserProfile()
+    /** Collar firmware string read over BLE (null if char missing / unread). */
+    var firmwareVersion: String? = null
     var cameraConfig: CameraConfig = CameraConfig()
 
     fun resetRecording() {
@@ -58,6 +62,7 @@ object TagSession {
 
     fun clearConnection() {
         connectedDevice = null
+        firmwareVersion = null
         resetRecording()
         customDataEnabled = false
         includeSiUnits = false

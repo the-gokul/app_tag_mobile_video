@@ -53,18 +53,26 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
         setSupportActionBar(binding.toolbar)
 
-        // Load persisted profile into session
+        // Load persisted user + pets
+        TagSession.appUser = com.nordic.tagmobile.model.AppUser.load(this)
         val profiles = com.nordic.tagmobile.model.UserProfile.loadAll(this)
         TagSession.userProfile = profiles.firstOrNull() ?: com.nordic.tagmobile.model.UserProfile()
 
-        // First-run: force profile setup
-        if (!TagSession.userProfile.isComplete) {
+        // First-run: login (Name + Phone) → then pets
+        if (!TagSession.appUser.isComplete) {
             startActivity(
-                android.content.Intent(this, ProfileActivity::class.java).apply {
+                Intent(this, LoginActivity::class.java).apply {
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                },
+            )
+            return
+        }
+        if (profiles.none { it.isComplete }) {
+            startActivity(
+                Intent(this, ProfileActivity::class.java).apply {
                     putExtra(ProfileActivity.EXTRA_FIRST_RUN, true)
-                    flags = android.content.Intent.FLAG_ACTIVITY_NEW_TASK or
-                        android.content.Intent.FLAG_ACTIVITY_CLEAR_TASK
-                }
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TASK
+                },
             )
             return
         }

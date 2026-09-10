@@ -22,6 +22,7 @@ data class SessionManifestData(
     // user
     val localUserId: String,
     val userName: String,
+    val userPhone: String = "",
     // pet
     val localPetId: String,
     val petName: String,
@@ -60,13 +61,10 @@ data class SessionManifestData(
     val appVersionName: String,
     val appVersionCode: Int,
     val savedAtMs: Long = System.currentTimeMillis(),
+    /** GOOD | WARNING | FAILED | SESSION_LOSS */
+    val qualityLabel: String = "GOOD",
+    val missingSamplePercent: Double = 0.0,
 ) {
-    fun qualityStatus(): String = when {
-        packetCount == 0 && sampleCount == 0 -> "FAILED"
-        hasPossibleLoss || parseFailures > 0 -> "WARNING"
-        else -> "GOOD"
-    }
-
     fun toJson(): JSONObject {
         val iso = isoFormatter()
         val durationSec = ((endTimeMs - startTimeMs).coerceAtLeast(0L) / 1000L).toInt()
@@ -74,6 +72,7 @@ data class SessionManifestData(
         val user = JSONObject()
             .put("local_user_id", localUserId.ifBlank { JSONObject.NULL })
             .put("name", userName)
+            .put("phone", userPhone.ifBlank { JSONObject.NULL })
 
         val pet = JSONObject()
             .put("local_pet_id", localPetId.ifBlank { JSONObject.NULL })
@@ -120,9 +119,9 @@ data class SessionManifestData(
             .put("end_percent", batteryEndPercent ?: JSONObject.NULL)
 
         val files = JSONObject()
-            .put("sensor_data", if (hasData) RecordingStore.FILE_DATA else JSONObject.NULL)
-            .put("video", if (hasVideo) RecordingStore.FILE_VIDEO else JSONObject.NULL)
-            .put("log", RecordingStore.FILE_LOG)
+            .put("sensor_data", if (hasData) RecordingStore.dataFileName(sessionId) else JSONObject.NULL)
+            .put("video", if (hasVideo) RecordingStore.videoFileName(sessionId) else JSONObject.NULL)
+            .put("log", RecordingStore.logFileName(sessionId))
 
         val app = JSONObject()
             .put("version", appVersionName)
@@ -132,12 +131,14 @@ data class SessionManifestData(
             .put("reason", terminationReason)
 
         val quality = JSONObject()
-            .put("status", qualityStatus())
+            .put("status", qualityLabel)
             .put("status_detail", statusDetail)
             .put("packet_count", packetCount)
             .put("sample_count", sampleCount)
             .put("parse_failures", parseFailures)
             .put("has_possible_loss", hasPossibleLoss)
+            .put("missing_sample_percent", missingSamplePercent)
+            .put("duration_sec", ((endTimeMs - startTimeMs).coerceAtLeast(0L) / 1000L).toInt())
 
         return JSONObject()
             .put("schema_version", 2)

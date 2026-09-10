@@ -22,6 +22,7 @@
             android:contentDescription="Back" />
 
         <TextView
+            android:id="@+id/toolbarTitle"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="@string/profile"
@@ -46,13 +47,15 @@
             android:padding="24dp">
 
             <TextView
+                android:id="@+id/ownerNameLabel"
                 android:layout_width="wrap_content"
                 android:layout_height="wrap_content"
                 android:text="Your Name"
                 android:textStyle="bold"
                 android:textSize="14sp"
                 android:textColor="#374151"
-                android:layout_marginBottom="6dp" />
+                android:layout_marginBottom="6dp"
+                android:visibility="gone" />
             <EditText
                 android:id="@+id/nameInput"
                 android:layout_width="match_parent"
@@ -62,7 +65,8 @@
                 android:padding="12dp"
                 android:background="@drawable/bg_input"
                 android:textSize="16sp"
-                android:layout_marginBottom="16dp" />
+                android:layout_marginBottom="16dp"
+                android:visibility="gone" />
 
             <TextView
                 android:layout_width="wrap_content"
@@ -239,6 +243,7 @@
                     app:srcCompat="@drawable/ic_add" />
 
                 <TextView
+                    android:id="@+id/addProfileLabel"
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:layout_marginTop="8dp"

@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
     android:layout_width="match_parent"
     android:layout_height="wrap_content"
     android:orientation="horizontal"
@@ -33,12 +34,20 @@
     </LinearLayout>
 
     <ImageButton
+        android:id="@+id/editProfileBtn"
+        android:layout_width="48dp"
+        android:layout_height="48dp"
+        android:src="@drawable/ic_edit"
+        android:background="?attr/selectableItemBackgroundBorderless"
+        android:contentDescription="@string/edit_profile"
+        app:tint="#00A9CE" />
+
+    <ImageButton
         android:id="@+id/deleteProfileBtn"
         android:layout_width="48dp"
         android:layout_height="48dp"
         android:src="@drawable/ic_delete"
         android:background="?attr/selectableItemBackgroundBorderless"
-        android:contentDescription="Delete Profile"
-        app:tint="#EF4444"
-        xmlns:app="http://schemas.android.com/apk/res-auto" />
+        android:contentDescription="@string/delete"
+        app:tint="#EF4444" />
 </LinearLayout>

@@ -15,7 +15,13 @@ data class UserProfile(
     val weight: String = "",
     val gender: String = "" // "Male" or "Female"
 ) {
-    val isComplete: Boolean get() = name.isNotBlank() && animalType.isNotBlank() && dogName.isNotBlank() && breed.isNotBlank() && age.isNotBlank() && weight.isNotBlank() && gender.isNotBlank()
+    val isComplete: Boolean
+        get() = animalType.isNotBlank() &&
+            dogName.isNotBlank() &&
+            breed.isNotBlank() &&
+            age.isNotBlank() &&
+            weight.isNotBlank() &&
+            gender.isNotBlank()
     
     val safeFileName: String get() =
         "${name.replace(Regex("[^A-Za-z0-9]"), "")}_${dogName.replace(Regex("[^A-Za-z0-9]"), "")}"

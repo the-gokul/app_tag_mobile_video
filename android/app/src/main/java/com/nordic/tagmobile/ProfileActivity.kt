@@ -32,14 +32,32 @@ class ProfileActivity : AppCompatActivity() {
         binding.backBtn.setOnClickListener { finish() }
         binding.saveProfileBtn.visibility = if (isFirstRun) View.VISIBLE else View.GONE
 
-        adapter = ProfileAdapter(profiles) { profile ->
-            profiles.remove(profile)
-            UserProfile.saveAll(this, profiles)
-            if (TagSession.userProfile.id == profile.id) {
-                TagSession.userProfile = profiles.firstOrNull() ?: UserProfile()
-            }
-            refreshList()
+        binding.userAvatarBtn.setOnClickListener {
+            startActivity(
+                Intent(this, LoginActivity::class.java).apply {
+                    putExtra(LoginActivity.EXTRA_EDIT, true)
+                },
+            )
         }
+
+        adapter = ProfileAdapter(
+            profiles,
+            onEdit = { profile ->
+                startActivity(
+                    Intent(this, AddProfileActivity::class.java).apply {
+                        putExtra(AddProfileActivity.EXTRA_PROFILE_ID, profile.id)
+                    },
+                )
+            },
+            onDelete = { profile ->
+                profiles.remove(profile)
+                UserProfile.saveAll(this, profiles)
+                if (TagSession.userProfile.id == profile.id) {
+                    TagSession.userProfile = profiles.firstOrNull() ?: UserProfile()
+                }
+                refreshList()
+            },
+        )
         binding.profilesList.layoutManager = LinearLayoutManager(this)
         binding.profilesList.adapter = adapter
 
@@ -53,7 +71,7 @@ class ProfileActivity : AppCompatActivity() {
 
         binding.saveProfileBtn.setOnClickListener {
             if (profiles.isEmpty()) {
-                Toast.makeText(this, "Please add at least one profile", Toast.LENGTH_SHORT).show()
+                Toast.makeText(this, "Please add at least one pet", Toast.LENGTH_SHORT).show()
                 startActivity(Intent(this, AddProfileActivity::class.java).apply {
                     putExtra(AddProfileActivity.EXTRA_FIRST_RUN, true)
                 })
@@ -103,6 +121,7 @@ class ProfileActivity : AppCompatActivity() {
 
 class ProfileAdapter(
     private val items: List<UserProfile>,
+    private val onEdit: (UserProfile) -> Unit,
     private val onDelete: (UserProfile) -> Unit,
 ) : RecyclerView.Adapter<ProfileAdapter.Holder>() {
 
@@ -113,9 +132,10 @@ class ProfileAdapter(
 
     override fun onBindViewHolder(holder: Holder, position: Int) {
         val item = items[position]
-        holder.name.text = item.name
+        holder.name.text = item.dogName
         holder.details.text =
-            "${item.animalType}: ${item.dogName} | ${item.breed} | ${item.gender} | ${item.age}y | ${item.weight}kg"
+            "${item.animalType} | ${item.breed} | ${item.gender} | ${item.age}y | ${item.weight}kg"
+        holder.editBtn.setOnClickListener { onEdit(item) }
         holder.deleteBtn.setOnClickListener { onDelete(item) }
     }
 
@@ -124,6 +144,7 @@ class ProfileAdapter(
     class Holder(view: View) : RecyclerView.ViewHolder(view) {
         val name: TextView = view.findViewById(R.id.profileName)
         val details: TextView = view.findViewById(R.id.profileDetails)
+        val editBtn: ImageButton = view.findViewById(R.id.editProfileBtn)
         val deleteBtn: ImageButton = view.findViewById(R.id.deleteProfileBtn)
     }
 }

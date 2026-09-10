@@ -28,22 +28,24 @@ data class HistoryEntry(
 /**
  * Local recording storage.
  *
- * New sessions (cloud-friendly):
+ * New sessions (cloud-friendly, batch upload after recording):
  * ```
  * files/sessions/SESSION-yyyyMMdd-HHmmss-xxxx/
- *   ├── data.xlsx
- *   ├── video.mp4
- *   ├── session.log
- *   └── manifest.json   (stub in Step 1; full fields in Step 2)
+ *   ├── SESSION-yyyyMMdd-HHmmss-xxxx.xlsx
+ *   ├── SESSION-yyyyMMdd-HHmmss-xxxx.mp4
+ *   ├── SESSION-yyyyMMdd-HHmmss-xxxx.log
+ *   └── manifest.json
  * ```
  *
- * Legacy flat layout (`data/`, `logs/`, `videos/`) is still listed for old History.
+ * Legacy flat layout (`data/`, `logs/`, `videos/`) and older fixed names
+ * (`data.xlsx` / `video.mp4` / `session.log`) are still readable in History.
  */
 object RecordingStore {
-    const val FILE_DATA = "data.xlsx"
-    const val FILE_VIDEO = "video.mp4"
-    const val FILE_LOG = "session.log"
     const val FILE_MANIFEST = "manifest.json"
+    /** @deprecated Old fixed names; kept for reading sessions saved before rename. */
+    private const val LEGACY_FILE_DATA = "data.xlsx"
+    private const val LEGACY_FILE_VIDEO = "video.mp4"
+    private const val LEGACY_FILE_LOG = "session.log"
 
     private const val META_SUFFIX = ".meta.json"
 
@@ -66,6 +68,10 @@ object RecordingStore {
         return "SESSION-${fmt.format(Date(atMs))}-$short"
     }
 
+    fun dataFileName(sessionId: String): String = "$sessionId.xlsx"
+    fun videoFileName(sessionId: String): String = "$sessionId.mp4"
+    fun logFileName(sessionId: String): String = "$sessionId.log"
+
     /** @deprecated Prefer [makeSessionId] for new recordings. Kept for legacy callers. */
     fun makeBaseName(
         deviceName: String,
@@ -85,23 +91,57 @@ object RecordingStore {
     fun createSessionDir(context: Context, sessionId: String): File =
         sessionDir(context, sessionId).also { it.mkdirs() }
 
-    fun sessionDataFile(sessionDir: File): File = File(sessionDir, FILE_DATA)
-    fun sessionVideoFile(sessionDir: File): File = File(sessionDir, FILE_VIDEO)
-    fun sessionLogFile(sessionDir: File): File = File(sessionDir, FILE_LOG)
+    fun sessionDataFile(sessionDir: File, sessionId: String = sessionDir.name): File =
+        File(sessionDir, dataFileName(sessionId))
+
+    fun sessionVideoFile(sessionDir: File, sessionId: String = sessionDir.name): File =
+        File(sessionDir, videoFileName(sessionId))
+
+    fun sessionLogFile(sessionDir: File, sessionId: String = sessionDir.name): File =
+        File(sessionDir, logFileName(sessionId))
+
     fun sessionManifestFile(sessionDir: File): File = File(sessionDir, FILE_MANIFEST)
+
+    /** Resolve data file in a session dir (new name, then legacy fixed name). */
+    fun resolveSessionDataFile(sessionDir: File): File? {
+        val id = sessionDir.name
+        val primary = sessionDataFile(sessionDir, id)
+        if (primary.exists()) return primary
+        val legacy = File(sessionDir, LEGACY_FILE_DATA)
+        if (legacy.exists()) return legacy
+        return null
+    }
+
+    fun resolveSessionVideoFile(sessionDir: File): File? {
+        val id = sessionDir.name
+        val primary = sessionVideoFile(sessionDir, id)
+        if (primary.exists()) return primary
+        val legacy = File(sessionDir, LEGACY_FILE_VIDEO)
+        if (legacy.exists()) return legacy
+        return null
+    }
+
+    fun resolveSessionLogFile(sessionDir: File): File {
+        val id = sessionDir.name
+        val primary = sessionLogFile(sessionDir, id)
+        if (primary.exists()) return primary
+        val legacy = File(sessionDir, LEGACY_FILE_LOG)
+        if (legacy.exists()) return legacy
+        return primary
+    }
 
     /** Prefer session package path; fall back to legacy flat `data/`. */
     fun dataFile(context: Context, sessionIdOrBase: String): File {
         val session = sessionDir(context, sessionIdOrBase)
         if (session.isDirectory || sessionIdOrBase.startsWith("SESSION-")) {
-            return sessionDataFile(createSessionDir(context, sessionIdOrBase))
+            return sessionDataFile(createSessionDir(context, sessionIdOrBase), sessionIdOrBase)
         }
         return File(dataDir(context), "$sessionIdOrBase.xlsx")
     }
 
     fun findDataFile(context: Context, baseName: String): File? {
-        val inSession = File(sessionDir(context, baseName), FILE_DATA)
-        if (inSession.exists()) return inSession
+        val session = sessionDir(context, baseName)
+        resolveSessionDataFile(session)?.let { return it }
         val xlsx = File(dataDir(context), "$baseName.xlsx")
         if (xlsx.exists()) return xlsx
         val csv = File(dataDir(context), "$baseName.csv")
@@ -112,14 +152,13 @@ object RecordingStore {
     fun logFile(context: Context, baseName: String): File {
         val session = sessionDir(context, baseName)
         if (session.isDirectory || baseName.startsWith("SESSION-")) {
-            return sessionLogFile(createSessionDir(context, baseName))
+            return sessionLogFile(createSessionDir(context, baseName), baseName)
         }
         return File(logsDir(context), "$baseName.log")
     }
 
     fun findVideoFile(context: Context, baseName: String): File? {
-        val inSession = File(sessionDir(context, baseName), FILE_VIDEO)
-        if (inSession.exists()) return inSession
+        resolveSessionVideoFile(sessionDir(context, baseName))?.let { return it }
         val dir = videosDir(context)
         val mp4 = File(dir, "$baseName.mp4")
         if (mp4.exists()) return mp4
@@ -132,7 +171,7 @@ object RecordingStore {
     fun latestVideoFile(context: Context): File? {
         val sessionVideos = sessionsRoot(context).listFiles()
             ?.filter { it.isDirectory }
-            ?.map { File(it, FILE_VIDEO) }
+            ?.mapNotNull { resolveSessionVideoFile(it) }
             ?.filter { it.isFile && it.length() > 0L }
             .orEmpty()
         val legacyVideos = videosDir(context).listFiles()
@@ -150,7 +189,7 @@ object RecordingStore {
 
     /**
      * Finalize a session package: write log + full [manifest.json].
-     * Caller must already have written [FILE_DATA] / [FILE_VIDEO] into the session dir.
+     * Caller must already have written session-id `.xlsx` / `.mp4` into the session dir.
      */
     fun saveRecording(
         context: Context,
@@ -168,10 +207,14 @@ object RecordingStore {
 
         if (isSessionPackage) {
             session.mkdirs()
-            val dataF = sessionDataFile(session)
-            val logF = sessionLogFile(session)
-            val vidF = sessionVideoFile(session).takeIf { it.exists() }
+            val dataF = sessionDataFile(session, baseName)
+            val logF = sessionLogFile(session, baseName)
+            val vidF = resolveSessionVideoFile(session)
+                ?: sessionVideoFile(session, baseName).takeIf { it.exists() }
+            // Prefer writing the new session-id log name
             logF.writeText(logContent, Charsets.UTF_8)
+            val dataExists = dataF.exists() || resolveSessionDataFile(session) != null
+            val videoExists = vidF != null
             val full = (manifest ?: SessionManifestData(
                 sessionId = baseName,
                 packetCount = packetCount,
@@ -201,33 +244,34 @@ object RecordingStore {
                 sensorSamplesPerPacket = null,
                 phoneStartTimestampMs = savedAt,
                 collarUptimeAtSyncMs = null,
-                hasData = dataF.exists(),
-                hasVideo = vidF != null,
+                hasData = dataExists,
+                hasVideo = videoExists,
                 galleryUri = galleryUri,
                 appVersionName = "unknown",
                 appVersionCode = 0,
                 savedAtMs = savedAt,
             )).copy(
                 sessionId = baseName,
-                hasData = dataF.exists(),
-                hasVideo = vidF != null,
+                hasData = dataExists,
+                hasVideo = videoExists,
                 galleryUri = galleryUri ?: manifest?.galleryUri,
                 savedAtMs = savedAt,
             )
             full.writeTo(session)
+            val resolvedData = resolveSessionDataFile(session) ?: dataF
             TagLogger.log(
                 LogCategory.FILE,
                 "AUTO_SAVE_OK",
-                "session=$baseName data=${dataF.name} video=${vidF?.name ?: "none"} quality=${full.qualityStatus()}",
+                "session=$baseName data=${resolvedData.name} video=${vidF?.name ?: "none"} quality=${full.qualityLabel}",
             )
             return HistoryEntry(
                 baseName = baseName,
-                dataFile = dataF,
+                dataFile = resolvedData,
                 logFile = logF,
                 videoFile = vidF,
                 packetCount = packetCount,
                 sampleCount = sampleCount,
-                status = full.qualityStatus(),
+                status = full.qualityLabel,
                 savedAtMs = savedAt,
                 galleryUri = galleryUri,
                 sessionDir = session,
@@ -306,10 +350,10 @@ object RecordingStore {
         val dirs = root.listFiles()?.filter { it.isDirectory && it.name.startsWith("SESSION-") }
             ?: return emptyList()
         return dirs.mapNotNull { dir ->
-            val dataF = sessionDataFile(dir)
-            if (!dataF.exists() && !sessionVideoFile(dir).exists()) return@mapNotNull null
-            val logF = sessionLogFile(dir)
-            val vidF = sessionVideoFile(dir).takeIf { it.exists() }
+            val dataF = resolveSessionDataFile(dir)
+            val vidF = resolveSessionVideoFile(dir)
+            if (dataF == null && vidF == null) return@mapNotNull null
+            val logF = resolveSessionLogFile(dir)
             val manifest = sessionManifestFile(dir)
             var galleryUri: String? = null
             val meta = if (manifest.exists()) {
@@ -330,7 +374,13 @@ object RecordingStore {
                         packets,
                         samples,
                         status,
-                        o.optLong("saved_at_ms", o.optLong("savedAtMs", dataF.lastModified().takeIf { dataF.exists() } ?: dir.lastModified())),
+                        o.optLong(
+                            "saved_at_ms",
+                            o.optLong(
+                                "savedAtMs",
+                                dataF?.lastModified() ?: dir.lastModified(),
+                            ),
+                        ),
                     )
                 } catch (_: Exception) {
                     Meta(0, 0, "Saved", dir.lastModified())
@@ -340,7 +390,7 @@ object RecordingStore {
             }
             HistoryEntry(
                 baseName = dir.name,
-                dataFile = dataF,
+                dataFile = dataF ?: sessionDataFile(dir),
                 logFile = logF,
                 videoFile = vidF,
                 packetCount = meta.packets,
@@ -425,7 +475,7 @@ object RecordingStore {
         val galleryNames = linkedSetOf(
             entry.videoFile?.name,
             "${entry.baseName}.mp4",
-            FILE_VIDEO,
+            LEGACY_FILE_VIDEO,
             "${entry.baseName}.webm",
             "${entry.baseName}_burn.mp4",
         ).filterNotNull().toMutableSet()

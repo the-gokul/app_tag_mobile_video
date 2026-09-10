@@ -4,15 +4,18 @@ import android.bluetooth.BluetoothDevice
 import android.bluetooth.BluetoothGatt
 import android.bluetooth.BluetoothGattCharacteristic
 import android.content.Context
+import com.nordic.tagmobile.TagSession
 import com.nordic.tagmobile.protocol.TagCommand
 import com.nordic.tagmobile.protocol.TagUuids
 import no.nordicsemi.android.ble.BleManager
 import no.nordicsemi.android.ble.observer.ConnectionObserver
 import no.nordicsemi.android.ble.data.Data
+import java.nio.charset.Charset
 import java.util.UUID
 
 /**
  * Nordic BleManager for Tag GATT: MTU, discover, notify, START/STOP writes.
+ * Optionally reads firmware version characteristic when present.
  */
 class TagBleManager(context: Context) : BleManager(context) {
 
@@ -28,9 +31,11 @@ class TagBleManager(context: Context) : BleManager(context) {
     private val streamUuid = UUID.fromString(TagUuids.STREAM_SERVICE)
     private val sensorUuid = UUID.fromString(TagUuids.SENSOR_DATA)
     private val commandUuid = UUID.fromString(TagUuids.COMMAND)
+    private val firmwareUuid = UUID.fromString(TagUuids.FIRMWARE_VERSION)
 
     private var sensorChar: BluetoothGattCharacteristic? = null
     private var commandChar: BluetoothGattCharacteristic? = null
+    private var firmwareChar: BluetoothGattCharacteristic? = null
     private var ready = false
 
     val isTagReady: Boolean get() = ready && isConnected
@@ -66,6 +71,7 @@ class TagBleManager(context: Context) : BleManager(context) {
             val service = gatt.getService(streamUuid) ?: return false
             sensorChar = service.getCharacteristic(sensorUuid)
             commandChar = service.getCharacteristic(commandUuid)
+            firmwareChar = service.getCharacteristic(firmwareUuid)
             val sensorOk = sensorChar != null &&
                 (sensorChar!!.properties and BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0
             val cmdOk = commandChar != null &&
@@ -88,8 +94,7 @@ class TagBleManager(context: Context) : BleManager(context) {
                     listener?.onError("Notify enable failed ($status)")
                 }
                 .done {
-                    ready = true
-                    bluetoothDevice?.let { listener?.onReady(it) }
+                    readFirmwareThenReady()
                 }
                 .enqueue()
         }
@@ -98,11 +103,43 @@ class TagBleManager(context: Context) : BleManager(context) {
             ready = false
             sensorChar = null
             commandChar = null
+            firmwareChar = null
         }
+    }
+
+    private fun readFirmwareThenReady() {
+        val fw = firmwareChar
+        if (fw == null || (fw.properties and BluetoothGattCharacteristic.PROPERTY_READ) == 0) {
+            TagSession.firmwareVersion = null
+            markReady()
+            return
+        }
+        readCharacteristic(fw)
+            .with { _, data ->
+                val bytes = data.value
+                TagSession.firmwareVersion = if (bytes != null && bytes.isNotEmpty()) {
+                    String(bytes, Charset.forName("UTF-8")).trim { it <= ' ' || it == '\u0000' }
+                        .ifBlank { null }
+                } else {
+                    null
+                }
+            }
+            .fail { _, _ ->
+                TagSession.firmwareVersion = null
+                markReady()
+            }
+            .done { markReady() }
+            .enqueue()
+    }
+
+    private fun markReady() {
+        ready = true
+        bluetoothDevice?.let { listener?.onReady(it) }
     }
 
     fun connectTag(device: BluetoothDevice) {
         ready = false
+        TagSession.firmwareVersion = null
         // Prefer LE 1M — matches tag advertising; avoid Coded during connect.
         connect(device)
             .retry(3, 200)

@@ -42,6 +42,7 @@ import com.nordic.tagmobile.protocol.XlsxExporter
 import com.nordic.tagmobile.storage.GalleryPublisher
 import com.nordic.tagmobile.storage.RecordingStore
 import com.nordic.tagmobile.storage.SessionManifestData
+import com.nordic.tagmobile.storage.StorageGate
 import java.io.File
 import java.text.SimpleDateFormat
 import java.util.*
@@ -118,9 +119,19 @@ class DeviceActivity : AppCompatActivity() {
         override fun onDisconnected() {
             runOnUiThread {
                 TagLogger.log(LogCategory.BLE, "DISCONNECTED", deviceLabel())
-                TagSession.clearConnection()
-                Toast.makeText(this@DeviceActivity, "Disconnected", Toast.LENGTH_SHORT).show()
-                finish()
+                if (isRecording) {
+                    // Auto Stop + save whatever we have; label SESSION_LOSS (not WARNING/FAILED).
+                    stopRecording(
+                        terminationReason = "BLE_DISCONNECT",
+                        qualityOverride = "SESSION_LOSS",
+                        skipBleStop = true,
+                        finishAfterSave = true,
+                    )
+                } else {
+                    TagSession.clearConnection()
+                    Toast.makeText(this@DeviceActivity, "Disconnected", Toast.LENGTH_SHORT).show()
+                    finish()
+                }
             }
         }
 
@@ -487,8 +498,18 @@ class DeviceActivity : AppCompatActivity() {
             Toast.makeText(this, "Camera not ready", Toast.LENGTH_SHORT).show()
             return
         }
+        val storage = StorageGate.check(this)
+        if (!storage.ok) {
+            TagLogger.log(
+                LogCategory.ERRORS,
+                "STORAGE_LOW",
+                "free=${storage.freeBytes}",
+            )
+            Toast.makeText(this, storage.message, Toast.LENGTH_LONG).show()
+            return
+        }
 
-        // Shared base name for video + CSV + log (must match History pairing)
+        // Shared session id for video + xlsx + log + manifest
         TagLogger.clearSessionLog()
         TagSession.receivedRows.clear()
         TagSession.packetIds.clear()
@@ -694,14 +715,46 @@ class DeviceActivity : AppCompatActivity() {
         TagSession.sessionBaseName = ""
     }
 
-    private fun stopRecording() {
+    private fun stopRecording(
+        terminationReason: String = "USER_STOP",
+        qualityOverride: String? = null,
+        skipBleStop: Boolean = false,
+        finishAfterSave: Boolean = false,
+    ) {
         if (!isRecording) return
         isRecording = false
         setRecordButtonUi(recording = false)
 
-        // Stop BLE
-        bleManager.stopRecording()
-        TagLogger.log(LogCategory.CONTROL, "STOP", deviceLabel())
+        // Snapshot before any clearConnection path
+        val deviceNameSnap = TagSession.connectedDevice?.name
+            ?: TagSession.receivedRows.firstOrNull()?.deviceId
+            ?: "Tag"
+        val deviceAddrSnap = TagSession.connectedDevice?.address ?: ""
+        val firmwareSnap = TagSession.firmwareVersion
+        val rowsSnap = TagSession.receivedRows.toList()
+        val packetIdsSnap = TagSession.packetIds.toList()
+        val packetCountSnap = TagSession.packetCount
+        val parseFailSnap = TagSession.parseFailures
+        val syncBaseSnap = TagSession.syncBaseUnixMs
+        val uptimeSnap = TagSession.tagUptimeAtSync
+        val startMsSnap = TagSession.recordingStartUnixMs.takeIf { it > 0L }
+            ?: syncBaseSnap.takeIf { it > 0L }
+            ?: System.currentTimeMillis()
+        val sessionIdSnap = TagSession.sessionBaseName
+        val profileSnap = TagSession.userProfile
+        val userSnap = TagSession.appUser
+        val deviceConfigSnap = TagSession.deviceConfig
+        val videoW = TagSession.recordingVideoWidth
+        val videoH = TagSession.recordingVideoHeight
+        val videoFps = TagSession.recordingVideoFps
+        val orientHint = TagSession.recordingOrientationHint
+
+        if (!skipBleStop) {
+            bleManager.stopRecording()
+            TagLogger.log(LogCategory.CONTROL, "STOP", deviceLabel())
+        } else {
+            TagLogger.log(LogCategory.CONTROL, "STOP_BLE_DISCONNECT", deviceLabel())
+        }
 
         // Stop video (timestamp already burned live into frames)
         try {
@@ -714,21 +767,42 @@ class DeviceActivity : AppCompatActivity() {
         mediaRecorder?.release(); mediaRecorder = null
         TagLogger.log(LogCategory.FILE, "VIDEO_SAVED", videoFile?.name ?: "")
 
-        // Restart preview-only session
-        startPreview()
+        if (!finishAfterSave) {
+            startPreview()
+        }
 
         val vFile = videoFile
         val vSize = vFile?.length()?.let { formatBytes(it) } ?: "?"
+        val endMs = System.currentTimeMillis()
+        val startMs = startMsSnap
+        val durationSec = ((endMs - startMs).coerceAtLeast(0L) / 1000L)
+        val hasVideo = vFile != null && vFile.exists() && vFile.length() > 0L
 
-        // Save data files (CSV/Log)
-        val report = SessionAnalyzer.analyze(
-            packetCount = TagSession.packetCount,
-            rows = TagSession.receivedRows.toList(),
-            packetIds = TagSession.packetIds.toList(),
-            parseFailures = TagSession.parseFailures,
+        val baseReport = SessionAnalyzer.analyze(
+            packetCount = packetCountSnap,
+            rows = rowsSnap,
+            packetIds = packetIdsSnap,
+            parseFailures = parseFailSnap,
+            durationSec = durationSec,
+            hasVideo = hasVideo,
         )
-        if (report.hasPossibleLoss) {
-            TagLogger.log(LogCategory.GAPS, "POSSIBLE_LOSS", report.statusDetail)
+        val report = if (qualityOverride != null) {
+            val detail = listOfNotNull(
+                "BLE/Tag disconnected during recording",
+                baseReport.statusDetail.takeIf { it.isNotBlank() },
+            ).joinToString("; ")
+            baseReport.copy(
+                qualityStatus = qualityOverride,
+                statusShort = qualityOverride,
+                statusDetail = detail,
+                hasPossibleLoss = true,
+            )
+        } else {
+            baseReport
+        }
+
+        if (report.qualityStatus != "GOOD") {
+            TagLogger.log(LogCategory.GAPS, "SESSION_QUALITY", "${report.qualityStatus} ${report.statusDetail}")
         } else {
             TagLogger.logDataSummary(
                 "SESSION_OK",
@@ -737,54 +811,48 @@ class DeviceActivity : AppCompatActivity() {
         }
         TagLogger.logDataSummary(
             "SESSION_SUMMARY",
-            "packets=${report.packetCount} samples=${report.sampleCount} status=${report.statusShort}",
+            "packets=${report.packetCount} samples=${report.sampleCount} quality=${report.qualityStatus} term=$terminationReason",
         )
 
         TagSession.lastFeedbackText = report.feedbackText
         TagSession.recordingState = RecordingState.SAVING
 
-        val syncBase = TagSession.syncBaseUnixMs
         val recordedVideo = vFile
 
         try {
-            val sessionId = TagSession.sessionBaseName.ifBlank {
-                RecordingStore.makeSessionId(syncBase.takeIf { it > 0L } ?: System.currentTimeMillis())
+            val sessionId = sessionIdSnap.ifBlank {
+                RecordingStore.makeSessionId(syncBaseSnap.takeIf { it > 0L } ?: System.currentTimeMillis())
             }
             TagSession.sessionBaseName = sessionId
             val sessionDir = RecordingStore.createSessionDir(this, sessionId)
             val dataFile = RecordingStore.sessionDataFile(sessionDir)
             XlsxExporter.write(
                 outFile = dataFile,
-                rows = TagSession.receivedRows,
+                rows = rowsSnap,
                 summary = XlsxExporter.SummaryInfo(
-                    profile = TagSession.userProfile,
-                    deviceConfig = TagSession.deviceConfig,
-                    deviceName = TagSession.connectedDevice?.name
-                        ?: TagSession.receivedRows.firstOrNull()?.deviceId
-                        ?: "Tag",
+                    profile = profileSnap,
+                    deviceConfig = deviceConfigSnap,
+                    deviceName = deviceNameSnap,
                     packetCount = report.packetCount,
                     sampleCount = report.sampleCount,
-                    status = report.statusShort,
+                    status = report.qualityStatus,
                 ),
             )
 
             val logBody = buildString {
                 appendLine("Tag session log")
                 appendLine("session_id=$sessionId")
-                appendLine("device=${deviceLabel()}")
+                appendLine("device=$deviceNameSnap $deviceAddrSnap")
+                appendLine("termination=$terminationReason")
                 appendLine("packets=${report.packetCount}")
                 appendLine("samples=${report.sampleCount}")
+                appendLine("quality=${report.qualityStatus}")
                 appendLine("status=${report.statusShort}")
                 if (report.statusDetail.isNotBlank()) appendLine(report.statusDetail)
                 appendLine("---")
                 append(TagLogger.sessionSnapshot())
             }
 
-            val profile = TagSession.userProfile
-            val endMs = System.currentTimeMillis()
-            val startMs = TagSession.recordingStartUnixMs.takeIf { it > 0L }
-                ?: TagSession.syncBaseUnixMs.takeIf { it > 0L }
-                ?: endMs
             val pkgInfo = try {
                 packageManager.getPackageInfo(packageName, 0)
             } catch (_: Exception) {
@@ -797,40 +865,37 @@ class DeviceActivity : AppCompatActivity() {
                 parseFailures = report.parseFailures,
                 statusDetail = report.statusDetail.ifBlank { report.statusShort },
                 hasPossibleLoss = report.hasPossibleLoss,
-                terminationReason = "USER_STOP",
-                localUserId = profile.id,
-                userName = profile.name,
-                localPetId = profile.id,
-                petName = profile.dogName,
-                animalType = profile.animalType,
-                breed = profile.breed,
-                sex = profile.gender,
-                age = profile.age,
-                weightKg = profile.weight,
-                deviceId = TagSession.connectedDevice?.name
-                    ?: TagSession.receivedRows.firstOrNull()?.deviceId
-                    ?: "Tag",
-                deviceAddress = TagSession.connectedDevice?.address ?: "",
+                terminationReason = terminationReason,
+                localUserId = userSnap.id.ifBlank { profileSnap.id },
+                userName = userSnap.name.ifBlank { profileSnap.name },
+                userPhone = userSnap.phone,
+                localPetId = profileSnap.id,
+                petName = profileSnap.dogName,
+                animalType = profileSnap.animalType,
+                breed = profileSnap.breed,
+                sex = profileSnap.gender,
+                age = profileSnap.age,
+                weightKg = profileSnap.weight,
+                deviceId = deviceNameSnap,
+                deviceAddress = deviceAddrSnap,
                 hardwareVersion = null,
-                firmwareVersion = null,
+                firmwareVersion = firmwareSnap,
                 startTimeMs = startMs,
                 endTimeMs = endMs,
-                videoWidth = TagSession.recordingVideoWidth,
-                videoHeight = TagSession.recordingVideoHeight,
-                videoFps = TagSession.recordingVideoFps,
-                orientationHint = TagSession.recordingOrientationHint,
-                videoOrientationLabel = SessionManifestData.orientationLabel(
-                    TagSession.recordingOrientationHint,
-                ),
-                sensorSamplePeriodMs = TagSession.deviceConfig.samplePeriodMs,
-                sensorSamplesPerPacket = TagSession.deviceConfig.samplesPerPacket,
-                phoneStartTimestampMs = TagSession.syncBaseUnixMs.takeIf { it > 0L } ?: startMs,
-                collarUptimeAtSyncMs = TagSession.tagUptimeAtSync,
+                videoWidth = videoW,
+                videoHeight = videoH,
+                videoFps = videoFps,
+                orientationHint = orientHint,
+                videoOrientationLabel = SessionManifestData.orientationLabel(orientHint),
+                sensorSamplePeriodMs = deviceConfigSnap.samplePeriodMs,
+                sensorSamplesPerPacket = deviceConfigSnap.samplesPerPacket,
+                phoneStartTimestampMs = syncBaseSnap.takeIf { it > 0L } ?: startMs,
+                collarUptimeAtSyncMs = uptimeSnap,
                 offsetMs = null,
                 batteryStartPercent = null,
                 batteryEndPercent = null,
                 hasData = dataFile.exists(),
-                hasVideo = recordedVideo?.exists() == true,
+                hasVideo = hasVideo,
                 galleryUri = null,
                 appVersionName = pkgInfo?.versionName ?: "0.3.0",
                 appVersionCode = if (android.os.Build.VERSION.SDK_INT >= 28) {
@@ -839,6 +904,8 @@ class DeviceActivity : AppCompatActivity() {
                     @Suppress("DEPRECATION")
                     pkgInfo?.versionCode ?: 0
                 },
+                qualityLabel = report.qualityStatus,
+                missingSamplePercent = report.missingSamplePercent,
             )
             val entry = RecordingStore.saveRecording(
                 context = this,
@@ -846,21 +913,25 @@ class DeviceActivity : AppCompatActivity() {
                 logContent = logBody,
                 packetCount = report.packetCount,
                 sampleCount = report.sampleCount,
-                status = report.statusShort,
+                status = report.qualityStatus,
                 manifest = manifest,
             )
             TagSession.lastHistoryEntry = entry
             TagSession.lastFeedbackText = report.feedbackText
             TagSession.recordingState = RecordingState.RECEIVED
-            Toast.makeText(this, "Saved ${entry.baseName}\nVideo: $vSize", Toast.LENGTH_LONG).show()
+            val toastMsg = if (qualityOverride == "SESSION_LOSS") {
+                "Tag disconnected — saved as SESSION_LOSS\n${entry.baseName}\nVideo: $vSize"
+            } else {
+                "Saved ${entry.baseName}\nQuality: ${report.qualityStatus}\nVideo: $vSize"
+            }
+            Toast.makeText(this, toastMsg, Toast.LENGTH_LONG).show()
 
-            // Timestamp already in file — publish to Gallery as SESSION-….mp4 (local file stays video.mp4)
             if (recordedVideo != null && recordedVideo.exists()) {
                 Thread {
                     val galleryUri = GalleryPublisher.publishVideo(
                         applicationContext,
                         recordedVideo,
-                        displayName = "$sessionId.mp4",
+                        displayName = recordedVideo.name,
                     )
                     if (galleryUri != null) {
                         RecordingStore.updateGalleryUri(
@@ -871,7 +942,9 @@ class DeviceActivity : AppCompatActivity() {
                         TagSession.lastHistoryEntry =
                             TagSession.lastHistoryEntry?.copy(galleryUri = galleryUri.toString())
                     }
-                    runOnUiThread { refreshLastVideoThumb() }
+                    if (!finishAfterSave) {
+                        runOnUiThread { refreshLastVideoThumb() }
+                    }
                 }.start()
             }
         } catch (e: Exception) {
@@ -884,7 +957,13 @@ class DeviceActivity : AppCompatActivity() {
                 )
             Toast.makeText(this, "Auto-save failed: ${e.message}", Toast.LENGTH_LONG).show()
         }
-        refreshLastVideoThumb()
+
+        if (finishAfterSave) {
+            TagSession.clearConnection()
+            finish()
+        } else {
+            refreshLastVideoThumb()
+        }
     }
 
     private fun latestVideoFile(): File? = RecordingStore.latestVideoFile(this)

@@ -136,7 +136,8 @@ object XlsxExporter {
 
         val pairs = listOf(
             "Field" to "Value",
-            "Profile name" to summary.profile.name,
+            "User name" to (com.nordic.tagmobile.TagSession.appUser.name.ifBlank { summary.profile.name }),
+            "User phone" to com.nordic.tagmobile.TagSession.appUser.phone,
             "Animal type" to summary.profile.animalType,
             "Animal name" to summary.profile.dogName,
             "Breed" to summary.profile.breed,

@@ -53,6 +53,10 @@
         <activity android:name=".HistoryActivity" android:exported="false" />
         <activity android:name=".ProfileActivity" android:exported="false" />
         <activity
+            android:name=".LoginActivity"
+            android:exported="false"
+            android:windowSoftInputMode="adjustPan" />
+        <activity
             android:name=".AddProfileActivity"
             android:exported="false"
             android:windowSoftInputMode="adjustPan" />
