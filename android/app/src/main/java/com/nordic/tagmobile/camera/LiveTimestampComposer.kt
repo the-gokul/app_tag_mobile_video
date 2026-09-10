@@ -39,6 +39,7 @@ class LiveTimestampComposer(
     private val videoHeight: Int,
     /** Same value passed to MediaRecorder.setOrientationHint (0/90/180/270). */
     private val orientationHint: Int,
+    private val sensorOrientation: Int = 90,
     private val timestampText: () -> String,
 ) : SurfaceTexture.OnFrameAvailableListener {
 
@@ -181,11 +182,11 @@ class LiveTimestampComposer(
         GLES20.glClearColor(0f, 0f, 0f, 1f)
         GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 
-        // 1) Camera — rotate the quad to correct for sensor vs orientationHint
-        //    The sensor is landscape; orientationHint tells the player to rotate CW.
-        //    We counter-rotate the quad the same amount so frames are upright in the buffer.
+        // 1) Camera — rotate the quad to correct for SurfaceTexture's display-oriented transform.
+        //    SurfaceTexture always pre-rotates frames to be upright on the Portrait display.
+        //    We counter-rotate based on the fixed sensorOrientation to get the raw sensor frame.
         Matrix.setIdentityM(rotMatrix, 0)
-        when (orientationHint) {
+        when (sensorOrientation) {
             90  -> Matrix.rotateM(rotMatrix, 0, 90f, 0f, 0f, 1f)
             180 -> Matrix.rotateM(rotMatrix, 0, 180f, 0f, 0f, 1f)
             270 -> Matrix.rotateM(rotMatrix, 0, -90f,  0f, 0f, 1f)

@@ -581,6 +581,7 @@ class DeviceActivity : AppCompatActivity() {
                 videoWidth = outW,
                 videoHeight = outH,
                 orientationHint = orientationHint,
+                sensorOrientation = sensorOrientation,
                 timestampText = { currentTimestamp() },
             )
             composer.start()
