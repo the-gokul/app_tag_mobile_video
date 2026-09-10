@@ -186,9 +186,9 @@ class LiveTimestampComposer(
         //    We counter-rotate the quad the same amount so frames are upright in the buffer.
         Matrix.setIdentityM(rotMatrix, 0)
         when (orientationHint) {
-            90  -> Matrix.rotateM(rotMatrix, 0, -90f, 0f, 0f, 1f)
+            90  -> Matrix.rotateM(rotMatrix, 0, 90f, 0f, 0f, 1f)
             180 -> Matrix.rotateM(rotMatrix, 0, 180f, 0f, 0f, 1f)
-            270 -> Matrix.rotateM(rotMatrix, 0, 90f,  0f, 0f, 1f)
+            270 -> Matrix.rotateM(rotMatrix, 0, -90f,  0f, 0f, 1f)
             // 0 or unknown: no rotation needed
         }
         GLES20.glUseProgram(program)
