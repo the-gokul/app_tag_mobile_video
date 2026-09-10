@@ -895,7 +895,7 @@ class DeviceActivity : AppCompatActivity() {
     }
 
     private fun currentTimestamp(): String {
-        val fmt = SimpleDateFormat("dd-MM-yyyy HH:mm:ss:SSS", Locale.US)
+        val fmt = SimpleDateFormat("EEEE, dd MMMM yyyy HH:mm:ss.SSS", Locale.US)
         return fmt.format(Date())
     }
 

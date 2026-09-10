@@ -205,7 +205,9 @@ class LiveTimestampComposer(
         GLES20.glDrawArrays(GLES20.GL_TRIANGLE_STRIP, 0, 4)
 
         // 2) Timestamp — compensated for orientationHint so playback shows bottom-center upright
-        val bmp = renderTimestampBitmap(timestampText())
+        val isPortrait = orientationHint == 90 || orientationHint == 270
+        val visualW = if (isPortrait) videoHeight else videoWidth
+        val bmp = renderTimestampBitmap(timestampText(), visualW)
         uploadBitmap(textTexId, bmp)
         val mvp = stampMvp(bmp.width, bmp.height)
         GLES20.glEnable(GLES20.GL_BLEND)
@@ -246,7 +248,7 @@ class LiveTimestampComposer(
 
         val scaleX = (bw.toFloat() / visualW) * 2f
         val scaleY = (bh.toFloat() / visualH) * 2f
-        val margin = 0.06f
+        val margin = 0.0f
 
         val mvp = FloatArray(16)
         Matrix.setIdentityM(mvp, 0)
@@ -286,26 +288,33 @@ class LiveTimestampComposer(
         return mvp
     }
 
-    private fun renderTimestampBitmap(text: String): Bitmap {
+    private fun renderTimestampBitmap(text: String, visualW: Int): Bitmap {
         val shortSide = minOf(videoWidth, videoHeight).toFloat()
-        val textSizePx = (shortSide * 0.042f).coerceIn(34f, 64f)
+        val textSizePx = (shortSide * 0.035f).coerceIn(30f, 60f)
         val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             color = Color.WHITE
             textSize = textSizePx
-            typeface = Typeface.MONOSPACE
+            typeface = Typeface.DEFAULT
             textAlign = Paint.Align.LEFT
+            setShadowLayer(2f, 1f, 1f, Color.parseColor("#80000000"))
         }
-        val padX = textSizePx * 0.45f
-        val padY = textSizePx * 0.28f
-        val w = (textPaint.measureText(text) + padX * 2).toInt().coerceAtLeast(8)
-        val fm = textPaint.fontMetrics
-        val h = (fm.descent - fm.ascent + padY * 2).toInt().coerceAtLeast(8)
-        val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bmp)
-        val bg = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = 0x8C000000.toInt() }
-        canvas.drawRoundRect(0f, 0f, w.toFloat(), h.toFloat(), 6f, 6f, bg)
-        canvas.drawText(text, padX, padY - fm.ascent, textPaint)
-        return bmp
+        val textHeight = textPaint.descent() - textPaint.ascent()
+        val bmpW = visualW
+        val bmpH = (textHeight + 32).toInt()
+
+        val bitmap = Bitmap.createBitmap(bmpW, bmpH, Bitmap.Config.ARGB_8888)
+        val canvas = Canvas(bitmap)
+        
+        val bgPaint = Paint().apply {
+            color = Color.parseColor("#66000000")
+        }
+        canvas.drawRect(0f, 0f, bmpW.toFloat(), bmpH.toFloat(), bgPaint)
+
+        val paddingLeft = 32f
+        val textY = (bmpH / 2f) - ((textPaint.descent() + textPaint.ascent()) / 2f)
+        canvas.drawText(text, paddingLeft, textY, textPaint)
+        
+        return bitmap
     }
 
     private fun releaseInternal() {

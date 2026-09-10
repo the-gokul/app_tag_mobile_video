@@ -64,6 +64,41 @@
             android:layout_width="match_parent"
             android:layout_height="match_parent" />
 
+        <TextView
+            android:id="@+id/timestampText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="bottom"
+            android:background="#66000000"
+            android:paddingStart="16dp"
+            android:paddingVertical="8dp"
+            android:textColor="#FFFFFF"
+            android:textSize="14sp"
+            android:shadowColor="#80000000"
+            android:shadowDx="1"
+            android:shadowDy="1"
+            android:shadowRadius="2"
+            android:text="Thursday, 10 September 2026 13:03:25.715" />
+
+        <TextView
+            android:id="@+id/recordDurationText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="top|center_horizontal"
+            android:layout_marginTop="16dp"
+            android:background="#66000000"
+            android:paddingHorizontal="16dp"
+            android:paddingVertical="6dp"
+            android:textColor="#FFFFFF"
+            android:textSize="16sp"
+            android:textStyle="bold"
+            android:shadowColor="#80000000"
+            android:shadowDx="1"
+            android:shadowDy="1"
+            android:shadowRadius="2"
+            android:text="00:00"
+            android:visibility="gone" />
+
         <!-- Camera overlay controls (top) -->
         <FrameLayout
             android:layout_width="match_parent"
@@ -100,38 +135,6 @@
             android:gravity="center"
             android:paddingBottom="32dp"
             android:background="@drawable/bg_gradient_bottom">
-            
-            <TextView
-                android:id="@+id/timestampText"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:background="@android:color/transparent"
-                android:textColor="#CCFFFFFF"
-                android:textSize="14sp"
-                android:fontFamily="monospace"
-                android:shadowColor="#80000000"
-                android:shadowDx="1"
-                android:shadowDy="1"
-                android:shadowRadius="3"
-                android:text="00-00-0000 00:00:00:000" />
-
-            <TextView
-                android:id="@+id/recordDurationText"
-                android:layout_width="wrap_content"
-                android:layout_height="wrap_content"
-                android:layout_marginTop="6dp"
-                android:layout_marginBottom="24dp"
-                android:background="@android:color/transparent"
-                android:textColor="#FFFFFFFF"
-                android:textSize="16sp"
-                android:textStyle="bold"
-                android:fontFamily="monospace"
-                android:shadowColor="#80000000"
-                android:shadowDx="1"
-                android:shadowDy="1"
-                android:shadowRadius="3"
-                android:text="00:00"
-                android:visibility="gone" />
 
             <!-- Last video thumb (left) + record control (center), like phone camera -->
             <FrameLayout
